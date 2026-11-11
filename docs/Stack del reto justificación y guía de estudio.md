@@ -14,7 +14,6 @@ Uso Python, FastAPI y PostgreSQL porque es el stack que HabiCapital declara en p
 | Migraciones | Alembic | Versionar el esquema de la base | Medio |
 | Pruebas | pytest y Hypothesis | Pruebas normales y de propiedades | Alto |
 | Contenedores | Docker y Docker Compose | Correr todo con un comando | Medio |
-| IA | API de Claude con tool use | Convertir texto en un borrador de cobro | Medio |
 | Frontend | React, TypeScript y Vite | Demo mínima | Bajo |
 | Automatización | Makefile y GitHub Actions | Comandos y pruebas en cada push | Bajo |
 
@@ -42,7 +41,6 @@ Cada herramienta tiene una razón y un límite que debo reconocer, porque en la 
 | SQLAlchemy 2 y Alembic | Dan control fino de transacciones y bloqueos, y migraciones versionadas y reproducibles. | Tienen curva de aprendizaje; en las partes críticas puedo escribir SQL directo. |
 | pytest y Hypothesis | pytest es el estándar. Hypothesis genera casos que no se me ocurrirían, como probar que la suma de las partes siempre es igual al total. | La concurrencia es más difícil de probar; la pruebo con hilos contra una base real. |
 | Docker Compose | Quien evalúa corre todo con un comando, sin instalar nada. | Si Docker falla en su máquina, no arranca; dejo instrucciones alternativas. |
-| API de Claude con tool use | Devuelve un borrador con esquema JSON fijo, y un modelo pequeño alcanza y es barato. | Puede equivocarse. Por eso solo propone: el código valida y el usuario confirma. Necesita llave y red. |
 | React, TypeScript y Vite | HabiCapital usa JavaScript o TypeScript en el frontend. TypeScript atrapa errores de tipo. | Solo muestra datos; nunca calcula dinero. |
 | GitHub Actions | Corre las pruebas en cada push y deja una insignia visible como evidencia. | No agrega funcionalidad. |
 
@@ -64,7 +62,7 @@ Estas opciones son válidas en otros contextos. Las descarto por este reto concr
 
 ## 5. Qué debo investigar y dónde
 
-Primero lo que protege el dinero, después los frameworks. Las fuentes son los sitios oficiales de cada herramienta (busca el dominio y entra por su tutorial). No los abrí al escribir esto, así que confirma que la guía corresponda a la versión que instales.
+Primero lo que protege el dinero, después los frameworks. Las fuentes son los sitios oficiales de cada herramienta (busca el dominio y entra por su tutorial). Confirma que la guía corresponda a la versión que instales.
 
 | Tema | Qué necesito saber | Dónde buscar | Cuándo |
 | --- | --- | --- | --- |
@@ -73,17 +71,17 @@ Primero lo que protege el dinero, después los frameworks. Las fuentes son los s
 | Partida doble | Qué es un libro contable y por qué cada transacción suma cero | Busca "double-entry ledger design" y pide a la IA ejemplos con números | Antes de programar |
 | Dinero con enteros | Por qué no usar float, redondeo y el método del resto mayor | docs.python.org (módulo `decimal` y "Floating Point Arithmetic: Issues and Limitations") | Antes de programar |
 | Idempotencia | Qué es una clave de idempotencia y cómo evita cobros duplicados | docs.stripe.com (solicitudes idempotentes) como ejemplo del concepto | Antes de programar |
+| Máquinas de estados | Modelar los estados de la bolsa y qué transiciones se permiten | Pide a la IA ejemplos y dibuja el diagrama de la bolsa | Antes de programar |
 | FastAPI | Rutas, dependencias, manejo de errores y su integración con Pydantic | fastapi.tiangolo.com (tutorial) | Mientras construyo |
 | Pydantic en modo estricto | Tipos estrictos, validadores y esquemas de entrada y salida | docs.pydantic.dev | Mientras construyo |
 | SQLAlchemy 2 | Sesiones, transacciones y `with_for_update` | docs.sqlalchemy.org (tutorial unificado) | Mientras construyo |
 | Alembic | Generar y aplicar migraciones | alembic.sqlalchemy.org | Mientras construyo |
 | pytest | Fixtures, parametrización y pruebas con base de datos | docs.pytest.org | Mientras construyo |
 | Hypothesis | Estrategias y pruebas de propiedades | hypothesis.readthedocs.io | Mientras construyo |
-| Pruebas de concurrencia | Hilos con conexiones separadas para simular transferencias simultáneas | docs.python.org (`concurrent.futures`) | Mientras construyo |
-| Zonas horarias | UTC y `America/Bogota` con `zoneinfo` | docs.python.org | Mientras construyo |
+| Pruebas de concurrencia | Hilos con conexiones separadas para simular operaciones simultáneas | docs.python.org (`concurrent.futures`) | Mientras construyo |
+| Zonas horarias | UTC y `America/Bogota` con `zoneinfo`, para las fechas límite | docs.python.org | Mientras construyo |
 | Docker Compose | Servicios, volúmenes y esperas de salud de la base | docs.docker.com/compose | Mientras construyo |
 | Seguridad básica | No subir llaves al repo y guardar contraseñas con hash | owasp.org | Mientras construyo |
-| API de Claude: tool use | Definir un esquema de salida y validarlo | docs.claude.com | Si sobra tiempo |
 | React, TypeScript y Vite | Componentes, estado y peticiones a la API | react.dev, vite.dev, typescriptlang.org | Si sobra tiempo |
 | GitHub Actions | Un flujo que corra las pruebas en cada push | docs.github.com/actions | Si sobra tiempo |
 
@@ -93,18 +91,17 @@ Dedico unas 3 horas antes de escribir código a lo que protege el dinero, y apre
 
 | Momento | Qué estudio o hago | Tiempo | Cómo sé que lo entendí |
 | --- | --- | --- | --- |
-| Antes de escribir código | Bloqueos y transacciones de PostgreSQL, partida doble e idempotencia. Pruebo `FOR UPDATE` con dos terminales abiertas y escribo la función de división con una prueba de Hypothesis. | 3 horas | Puedo explicar por qué dos transferencias simultáneas no dejan un saldo negativo. |
+| Antes de escribir código | Bloqueos y transacciones de PostgreSQL, partida doble e idempotencia. Pruebo `FOR UPDATE` con dos terminales abiertas y escribo la función de división con una prueba de Hypothesis. | 3 horas | Puedo explicar por qué un aporte y una cancelación simultáneos no dejan dinero perdido. |
 | Fases 2 y 3: base de datos y núcleo contable | Sesiones y transacciones de SQLAlchemy, fixtures de pytest y la prueba de concurrencia. Pido a la IA que me explique cada bloque que genere. | Mientras construyo | Rompo a propósito el bloqueo y mi prueba de concurrencia falla. |
-| Fases 4 a 6: API, grupos y recurrencia | FastAPI, Pydantic estricto y Alembic. Reviso zonas horarias y meses con menos días. | Mientras construyo | Mi API rechaza montos con decimales, negativos y duplicados. |
-| Fase 7: IA | Tool use de Claude y la evaluación de 15 a 20 frases. | 1 hora de lectura | Tengo una tabla con cuántas frases interpretó bien. |
-| Fase 8: interfaz | Solo lo mínimo de React. La IA la construye y yo reviso que no calcule dinero. | Mientras construyo | Puedo explicar cómo la interfaz llama a la API. |
-| Último día | Simulacro de entrevista con cambios sorpresa: comisión, límite diario y reverso de una transferencia. | 2 horas | Hago cada cambio en menos de 20 minutos, con las pruebas en verde. |
+| Fases 4 a 6: API, bolsas, cancelación y vencimiento | FastAPI, Pydantic estricto y Alembic. Reviso zonas horarias para las fechas límite. | Mientras construyo | Mi API rechaza montos con decimales, negativos, pagos distintos a la parte y duplicados. |
+| Fase 7: interfaz | Solo lo mínimo de React. La IA la construye y yo reviso que no calcule dinero. | Mientras construyo | Puedo explicar cómo la interfaz llama a la API. |
+| Último día | Simulacro de entrevista con cambios sorpresa: comisión, límite diario, pagos parciales y reverso de una transferencia. | 2 horas | Hago cada cambio en menos de 20 minutos, con las pruebas en verde. |
 
 ## 7. Cómo justificarlo en el README
 
 Este borrador va en primera persona, para el punto 1 del README. Reescríbelo al final con lo que realmente hayas hecho, porque si algo cambia durante el proyecto, el texto debe cambiar también.
 
-> Elegí Python y FastAPI porque son el stack de backend que HabiCapital usa en producción y porque son las herramientas que mejor domino para un plazo de 72 horas. Elegí PostgreSQL porque necesito transacciones atómicas, bloqueo de filas y restricciones que impidan saldos negativos o duplicados incluso si mi código falla: la base de datos es mi última defensa. Guardo el dinero en pesos enteros y no en decimales, porque los decimales binarios acumulan errores. Uso SQLAlchemy y Alembic para controlar las transacciones y versionar el esquema, pytest y Hypothesis para probar propiedades (por ejemplo, que la suma de las partes de un cobro siempre sea igual al total) y Docker Compose para que cualquiera corra el proyecto con un solo comando. Dejé fuera Terraform y los microservicios porque no aportaban a la pregunta del reto y me habrían quitado tiempo de las pruebas del núcleo.
+> Elegí Python y FastAPI porque son el stack de backend que HabiCapital usa en producción y porque son las herramientas que mejor domino para un plazo de 72 horas. Elegí PostgreSQL porque necesito transacciones atómicas, bloqueo de filas y restricciones que impidan saldos negativos o duplicados incluso si mi código falla: la base de datos es mi última defensa. Guardo el dinero en pesos enteros y no en decimales, porque los decimales binarios acumulan errores. Uso SQLAlchemy y Alembic para controlar las transacciones y versionar el esquema, pytest y Hypothesis para probar propiedades (por ejemplo, que la suma de las partes de una bolsa siempre sea igual al total) y Docker Compose para que cualquiera corra el proyecto con un solo comando. Dejé fuera Terraform y los microservicios porque no aportaban a la pregunta del reto y me habrían quitado tiempo de las pruebas del núcleo.
 
 Lo que no sé todavía lo escribo aparte, en el punto 5, con honestidad.
 
@@ -116,10 +113,10 @@ Estas son las preguntas que más probablemente harán sobre mis decisiones, con 
 | --- | --- |
 | ¿Por qué PostgreSQL y no MongoDB? | Necesito transacciones, restricciones y llaves foráneas. La partida doble es un modelo relacional y la base me protege aunque mi código falle. |
 | ¿Qué pasa si dos transferencias salen a la vez de la misma cuenta? | Bloqueo las filas con `FOR UPDATE` siempre en el mismo orden y la base tiene una restricción de saldo mayor o igual a cero. Lo probé con 100 transferencias simultáneas. |
+| ¿Qué pasa si alguien paga mientras el creador cancela la bolsa? | Bloqueo primero la bolsa y reviso su estado después del bloqueo. La operación que llega segunda ve el estado nuevo y se rechaza. Lo probé con hilos. |
 | ¿Por qué enteros y no `Decimal`? | Los enteros son exactos y simples. `Decimal` sirve si hay centavos, pero obliga a fijar el modo de redondeo. Mi supuesto es COP sin centavos. |
 | ¿Por qué FastAPI y no Django? | Me da validación y documentación sin esconder el control de las transacciones. Django es más pesado para lo que necesito. |
 | ¿Qué hace la base de datos que no haga tu código? | Es la última defensa: `CHECK`, `UNIQUE` y llaves foráneas impiden estados inválidos aunque haya un bug. |
 | ¿Cómo sabes que tus pruebas sirven? | Rompo el código a propósito, por ejemplo quito el bloqueo, y compruebo que una prueba falla. |
-| ¿Qué pasa si falla el modelo de IA? | La app sigue funcionando con el formulario normal. La IA solo propone y nunca toca el libro contable. |
 | ¿Por qué un monolito y no microservicios? | Con 72 horas, un monolito con capas claras es más seguro de probar. Lo declaro como decisión, no como desconocimiento. |
 | ¿Qué cambiarías con millones de usuarios? | Réplicas de lectura, particionar el libro por fecha, colas para trabajos en segundo plano y más observabilidad. Aún no domino los detalles y lo digo. |

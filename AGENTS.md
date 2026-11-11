@@ -1,6 +1,6 @@
 # Cuadre: instrucciones para agentes de código
 
-Cuadre es una billetera digital simulada (reto técnico de HabiCapital): cuentas, carga de saldo, transferencias, saldo, historial y cobros divididos en grupos con recurrencia. Es dinero: el sistema no puede perder ni crear un peso.
+Cuadre es una billetera digital simulada (reto técnico de HabiCapital): cuentas, carga de saldo, transferencias, saldo, historial y **bolsas**: cobros en grupo con una cuenta común, división exacta y transferencia final a una cuenta objetivo. Es dinero: el sistema no puede perder ni crear un peso.
 
 ## Contexto
 
@@ -10,10 +10,9 @@ Cuadre es una billetera digital simulada (reto técnico de HabiCapital): cuentas
 
 ```
 backend/app/api/        endpoints delgados: validan y delegan
-backend/app/services/   casos de uso: libro contable, cobros, recurrencia
-backend/app/domain/     reglas puras sin base de datos: división, validaciones
+backend/app/services/   casos de uso: libro contable, bolsas y vencimientos
+backend/app/domain/     reglas puras sin base de datos: división, estados de la bolsa, validaciones
 backend/app/db/         modelos, sesión y migraciones
-backend/app/ai/         parser de cobros (real y falso)
 backend/tests/          pruebas
 ```
 
@@ -32,15 +31,26 @@ backend/tests/          pruebas
 3. Partida doble: cada transacción genera movimientos que suman cero. Cargar saldo sale de una cuenta de sistema.
 4. Cada operación de dinero es una sola transacción de base de datos: todo o nada.
 5. Los movimientos son inmutables: nada de `UPDATE` ni `DELETE`. Un error se corrige con un movimiento compensatorio.
-6. Concurrencia: bloquea las cuentas con `SELECT ... FOR UPDATE`, siempre ordenadas por id ascendente. Aislamiento `READ COMMITTED`. Reintentos acotados (máximo 3) solo ante los errores `40P01` y `40001`. Prohibido usar bloqueos en memoria (`threading.Lock`, `asyncio.Lock`) o estado global para saldos.
+6. Concurrencia: un solo orden de bloqueo, siempre con `SELECT ... FOR UPDATE`: primero la fila de la bolsa (si la operación toca una) y después las cuentas por id ascendente, incluida la de quien paga. El estado de la bolsa se lee después de bloquearla y decide si la operación sigue. Aislamiento `READ COMMITTED`. Reintentos acotados (máximo 3) solo ante los errores `40P01` y `40001`. Prohibido usar bloqueos en memoria (`threading.Lock`, `asyncio.Lock`) o estado global para saldos.
 7. Idempotencia: toda operación que mueve dinero recibe una clave con restricción `UNIQUE`. Un reintento devuelve el resultado original sin mover dinero otra vez.
-8. La base de datos también defiende: `CHECK (monto > 0)`, `CHECK (saldo >= 0)`, `UNIQUE` para idempotencia y para `(plantilla_id, periodo)`. Nunca elimines ni relajes una restricción para que algo funcione.
-9. La división de un cobro es exacta y determinista: la suma de las partes siempre es igual al total. Usa las funciones de `domain/` y la regla del sobrante definida en `SPEC.md`.
-10. Tiempo: guarda en UTC y calcula la recurrencia en `America/Bogota`. Toda función que dependa de la hora recibe `ahora` como parámetro.
-11. La IA (`app/ai/`) solo produce borradores. Nunca llama al libro contable ni crea un cobro sin confirmación del usuario.
-12. Rechaza entradas inválidas: montos no enteros, cero o negativos, cuentas inexistentes y transferencias a uno mismo. Nunca redondees en silencio.
+8. La base de datos también defiende: `CHECK (monto > 0)`, `CHECK (saldo >= 0)`, `UNIQUE` para la idempotencia y para que una bolsa se cierre una sola vez. Nunca elimines ni relajes una restricción para que algo funcione.
+9. La división es exacta y determinista: la suma de las partes siempre es igual al total. Usa las funciones de `domain/` y la regla del sobrante definida en `SPEC.md`.
+10. Tiempo: guarda en UTC e interpreta las fechas límite en `America/Bogota`. Toda función que dependa de la hora recibe `ahora` como parámetro.
+11. Rechaza entradas inválidas: montos no enteros, cero o negativos, cuentas inexistentes, transferencias a uno mismo y pagos distintos a la parte exacta. Nunca redondees en silencio.
 
 Si una tarea exige romper alguna de estas reglas, detente y pregunta.
+
+## Reglas de las bolsas
+
+1. Cada bolsa tiene su propia cuenta de tipo `bolsa`. Solo admite aportes, devoluciones y la transferencia a la cuenta objetivo; ninguna otra operación la toca.
+2. La configuración se fija al crear la bolsa y no cambia: la parte de cada participante, la cuenta objetivo, la fecha límite y la política de vencimiento (`transferir` o `devolver`). Cada bolsa es de un solo uso.
+3. Solo pagos completos: cada participante paga exactamente su parte.
+4. Un participante puede retirarse mientras la bolsa esté abierta y antes de la fecha límite, haya pagado o no. Si pagó, se le devuelve su aporte en la misma transacción. La meta baja en su parte; las demás partes no cambian.
+5. Cuando lo aportado iguala la meta, todo se transfiere a la cuenta objetivo en la misma transacción del aporte o retiro que la completó. Si se retiran todos, la bolsa se cierra sin mover dinero.
+6. Al vencer sin completarse se aplica la política: `transferir` envía lo reunido a la cuenta objetivo y `devolver` le devuelve a cada uno lo suyo.
+7. Si el creador cancela: con `devolver`, se devuelve todo de inmediato; con `transferir`, cada participante que pagó decide si su aporte se envía o se le devuelve. El plazo para decidir y el valor por defecto están en `SPEC.md`.
+8. Lo que se le debe devolver a cada participante se calcula desde los movimientos del libro (aportes menos devoluciones), nunca desde un contador aparte.
+9. Una bolsa cerrada siempre tiene saldo cero.
 
 ## Protocolo de trabajo (obligatorio en cada tarea)
 
@@ -53,7 +63,7 @@ Al recibir una tarea, lee `SPEC.md` y los archivos relevantes. No crees, edites 
 1. **Objetivo:** una o dos frases.
 2. **Archivos** a crear o modificar.
 3. **Diseño:** funciones y firmas, flujo y cambios de esquema.
-4. **Reglas del dinero afectadas** y cómo se cumplen.
+4. **Reglas del dinero y de las bolsas afectadas**, y cómo se cumplen.
 5. **Pruebas a escribir:** nombre y qué verifica cada una (caso normal, borde y error; propiedades o concurrencia cuando aplique).
 6. **Supuestos y riesgos.**
 7. **Fuera de alcance.**
@@ -81,7 +91,7 @@ Si una prueba aprobada parece incorrecta, o el plan necesita cambiar, detente, e
 - `pytest` completo en verde.
 - `ruff check .` y `ruff format --check .` sin errores.
 - `make check` en verde, si existe.
-- Revisa tu propio diff contra las reglas del dinero, una por una.
+- Revisa tu propio diff contra las reglas del dinero y de las bolsas, una por una.
 
 ### Fase 5. Reporte
 
@@ -98,7 +108,7 @@ No hagas `git commit`, `git push` ni cambies de rama salvo que el usuario lo pid
 
 ### Auditoría (`AUDITA: <alcance>`)
 
-Solo lectura. Revisa el alcance indicado contra las reglas del dinero: concurrencia, redondeo, idempotencia, atomicidad, validaciones y pruebas débiles. Si el alcance es "último cambio", usa `git diff`. Entrega los hallazgos ordenados por gravedad (alta, media, baja), con archivo y línea, y la prueba que detectaría cada problema. No corrijas nada sin un plan aprobado.
+Solo lectura. Revisa el alcance indicado contra las reglas del dinero y de las bolsas: concurrencia, redondeo, idempotencia, atomicidad, validaciones y pruebas débiles. Si el alcance es "último cambio", usa `git diff`. Entrega los hallazgos ordenados por gravedad (alta, media, baja), con archivo y línea, y la prueba que detectaría cada problema. No corrijas nada sin un plan aprobado.
 
 ## Convenciones de código
 
@@ -115,8 +125,7 @@ Solo lectura. Revisa el alcance indicado contra las reglas del dinero: concurren
 - Cada prueba es independiente y limpia su estado.
 - Lo que mueve dinero se prueba contra PostgreSQL real, sin simulaciones de la base.
 - Hypothesis para las propiedades de `domain/`, como que la suma de las partes sea igual al total.
-- Concurrencia: hilos con conexiones separadas y verificación de invariantes al final.
-- Sin red: las pruebas usan el parser de IA falso.
+- Concurrencia: hilos con conexiones separadas y verificación de invariantes al final. Casos mínimos de bolsas: último aporte contra retiro, contra cancelación y contra vencimiento, y dos aportes finales al mismo tiempo. La transferencia final ocurre una sola vez.
 - Hora fija inyectada: nada de `datetime.now()` dentro de la lógica que se prueba.
 - Nombres: `test_<comportamiento_esperado>`.
 
