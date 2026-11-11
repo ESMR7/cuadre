@@ -32,11 +32,11 @@ backend/tests/          pruebas
 4. Cada operación de dinero es una sola transacción de base de datos: todo o nada.
 5. Los movimientos son inmutables: nada de `UPDATE` ni `DELETE`. Un error se corrige con un movimiento compensatorio.
 6. Concurrencia: un solo orden de bloqueo, siempre con `SELECT ... FOR UPDATE`: primero la fila de la bolsa (si la operación toca una) y después las cuentas por id ascendente, incluida la de quien paga. El estado de la bolsa se lee después de bloquearla y decide si la operación sigue. Aislamiento `READ COMMITTED`. Reintentos acotados (máximo 3) solo ante los errores `40P01` y `40001`. Prohibido usar bloqueos en memoria (`threading.Lock`, `asyncio.Lock`) o estado global para saldos.
-7. Idempotencia: toda operación que mueve dinero recibe una clave con restricción `UNIQUE`. Un reintento devuelve el resultado original sin mover dinero otra vez.
-8. La base de datos también defiende: `CHECK (monto > 0)`, `CHECK (saldo >= 0)`, `UNIQUE` para la idempotencia y para que una bolsa se cierre una sola vez. Nunca elimines ni relajes una restricción para que algo funcione.
+7. Idempotencia: toda operación que mueve dinero recibe una clave asociada al usuario que la inicia, con restricción `UNIQUE (usuario_id, clave)`. La clave no depende de la sesión. Un reintento devuelve el resultado original sin mover dinero otra vez.
+8. La base de datos también defiende: `CHECK (monto > 0)`, `UNIQUE` para la idempotencia y para que una bolsa se cierre una sola vez, y restricciones de saldo por tipo de cuenta: `CHECK (saldo >= 0)` en toda cuenta salvo la única de tipo `sistema`, que cumple `CHECK (saldo <= 0)`. Esa es la única excepción y no se amplía a ninguna otra cuenta. Nunca elimines ni relajes una restricción para que algo funcione.
 9. La división es exacta y determinista: la suma de las partes siempre es igual al total. Usa las funciones de `domain/` y la regla del sobrante definida en `SPEC.md`.
 10. Tiempo: guarda en UTC e interpreta las fechas límite en `America/Bogota`. Toda función que dependa de la hora recibe `ahora` como parámetro.
-11. Rechaza entradas inválidas: montos no enteros, cero o negativos, cuentas inexistentes, transferencias a uno mismo y pagos distintos a la parte exacta. Nunca redondees en silencio.
+11. Rechaza entradas inválidas: montos no enteros, cero, negativos o por encima del tope definido en `SPEC.md`, cuentas inexistentes, transferencias a uno mismo y pagos distintos a la parte exacta. Nunca redondees en silencio.
 
 Si una tarea exige romper alguna de estas reglas, detente y pregunta.
 
@@ -47,10 +47,10 @@ Si una tarea exige romper alguna de estas reglas, detente y pregunta.
 3. Solo pagos completos: cada participante paga exactamente su parte.
 4. Un participante puede retirarse mientras la bolsa esté abierta y antes de la fecha límite, haya pagado o no. Si pagó, se le devuelve su aporte en la misma transacción. La meta baja en su parte; las demás partes no cambian.
 5. Cuando lo aportado iguala la meta, todo se transfiere a la cuenta objetivo en la misma transacción del aporte o retiro que la completó. Si se retiran todos, la bolsa se cierra sin mover dinero.
-6. Al vencer sin completarse se aplica la política: `transferir` envía lo reunido a la cuenta objetivo y `devolver` le devuelve a cada uno lo suyo.
-7. Si el creador cancela: con `devolver`, se devuelve todo de inmediato; con `transferir`, cada participante que pagó decide si su aporte se envía o se le devuelve. El plazo para decidir y el valor por defecto están en `SPEC.md`.
-8. Lo que se le debe devolver a cada participante se calcula desde los movimientos del libro (aportes menos devoluciones), nunca desde un contador aparte.
-9. Una bolsa cerrada siempre tiene saldo cero.
+6. Al vencer sin completarse se aplica la política: `transferir` envía lo reunido a la cuenta objetivo y `devolver` le devuelve a cada uno lo suyo, en una transacción por participante.
+7. Si el creador cancela: con `devolver`, se devuelve el aporte de cada participante que pagó, en una transacción por participante, todas seguidas y sin esperar confirmación; con `transferir`, cada participante que pagó decide si su aporte se envía o se le devuelve. El plazo para decidir y el valor por defecto están en `SPEC.md`.
+8. Lo que se le debe devolver a cada participante se calcula desde los movimientos del libro (aportes menos devoluciones), nunca desde un contador aparte. Por eso una devolución repetida o retomada tras una falla no puede pagar de más.
+9. Una bolsa cerrada siempre tiene saldo cero. Los estados intermedios con saldo (por ejemplo, cancelada mientras se devuelve) están definidos en `SPEC.md`.
 
 ## Protocolo de trabajo (obligatorio en cada tarea)
 
@@ -116,7 +116,7 @@ Solo lectura. Revisa el alcance indicado contra las reglas del dinero y de las b
 - Identificadores en español, sin tildes ni ñ (`transferir`, `cuenta_origen`), salvo términos técnicos estándar.
 - Simple y explícito antes que ingenioso. Funciones pequeñas y con tipos. Sin abstracciones especulativas.
 - Endpoints delgados: la lógica vive en `services/` y `domain/`.
-- Errores de dominio como excepciones propias; la API las traduce a códigos HTTP (400, 404, 409, 422).
+- Errores de dominio como excepciones propias; la API las traduce a códigos HTTP (400, 401, 404, 409, 422).
 - Una sesión de base de datos por petición. Nunca compartas sesiones entre hilos.
 
 ## Pruebas
@@ -132,6 +132,7 @@ Solo lectura. Revisa el alcance indicado contra las reglas del dinero y de las b
 ## Seguridad y límites
 
 - Nunca leas, muestres ni modifiques `.env`. Usa `.env.example` como referencia y no escribas llaves en el código.
+- Contraseñas y tokens de sesión se guardan solo como hash, nunca en claro. No los escribas en logs, respuestas de error ni pruebas impresas.
 - `README.md` y `AI_LOG.md` los escribe el autor en primera persona. Solo edita la sección técnica de cómo correr el proyecto, y solo si te lo piden.
 - Pide permiso antes de cualquier acción destructiva: `docker compose down -v`, `rm -rf`, `DROP`, borrar archivos o reescribir el historial de git.
 
