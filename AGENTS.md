@@ -6,6 +6,7 @@ Cuadre es una billetera digital simulada (reto técnico de HabiCapital): cuentas
 
 - **Fuente de verdad del producto:** `SPEC.md`. Plan general y guías: `docs/`. Si este archivo y `SPEC.md` se contradicen, detente y pregunta.
 - **Stack:** Python 3.12+, FastAPI (endpoints síncronos `def`), SQLAlchemy 2 síncrono con psycopg 3, Pydantic v2 en modo estricto, Alembic, PostgreSQL 17 en Docker, pytest, Hypothesis, httpx y Ruff. Más adelante: React, TypeScript y Vite.
+- **Barrido de vencidas:** hilo iniciado en el `lifespan` de FastAPI, cada 60 s (variable de entorno), con un solo worker de uvicorn. Usa su propia sesión, una transacción por paso y captura excepciones por bolsa y por ciclo. Solo la API y este hilo leen el reloj.
 - **Estructura:**
 
 ```
@@ -31,12 +32,13 @@ backend/tests/          pruebas
 3. Partida doble: cada transacción genera movimientos que suman cero. Cargar saldo sale de una cuenta de sistema.
 4. Cada operación de dinero es una sola transacción de base de datos: todo o nada.
 5. Los movimientos son inmutables: nada de `UPDATE` ni `DELETE`. Un error se corrige con un movimiento compensatorio.
-6. Concurrencia: un solo orden de bloqueo, siempre con `SELECT ... FOR UPDATE`: primero la fila de la bolsa (si la operación toca una) y después las cuentas por id ascendente, incluida la de quien paga. El estado de la bolsa se lee después de bloquearla y decide si la operación sigue. Aislamiento `READ COMMITTED`. Reintentos acotados (máximo 3) solo ante los errores `40P01` y `40001`. Prohibido usar bloqueos en memoria (`threading.Lock`, `asyncio.Lock`) o estado global para saldos.
-7. Idempotencia: toda operación que mueve dinero recibe una clave asociada al usuario que la inicia, con restricción `UNIQUE (usuario_id, clave)`. La clave no depende de la sesión. Un reintento devuelve el resultado original sin mover dinero otra vez.
+6. Concurrencia: un solo orden dentro de toda operación: (1) leer la sesión sin bloquearla; (2) registrar la clave de idempotencia con `INSERT ... ON CONFLICT`; (3) bloquear la fila de la bolsa con `SELECT ... FOR UPDATE`, si la operación toca una; (4) bloquear las cuentas por id ascendente con `SELECT ... FOR UPDATE`, incluida la de quien paga. Nunca se bloquean dos bolsas en una misma transacción: el barrido procesa cada bolsa en su propia transacción. El estado de la bolsa se lee después de bloquearla y decide si la operación sigue. Aislamiento `READ COMMITTED`. Reintentos acotados (máximo 3) del caso de uso completo, solo ante los errores `40P01` y `40001`; si se agotan, 503. Prohibido usar bloqueos en memoria (`threading.Lock`, `asyncio.Lock`) o estado global para saldos.
+7. Idempotencia: toda operación que mueve dinero recibe una clave generada por el cliente (cabecera `Idempotency-Key`, UUID v4), asociada al usuario que la inicia con `UNIQUE (usuario_id, clave)`. La clave no depende de la sesión. Se guarda junto con el hash SHA-256 de la operación, los ids de la ruta y el cuerpo canónico. Misma clave y mismo hash: se devuelve el resultado original, reconstruido desde el libro, sin mover dinero otra vez. Misma clave con otro hash: 409 `clave_reutilizada`. La clave solo persiste si la transacción confirma. La verificación es un `INSERT ... ON CONFLICT`, nunca un `SELECT` seguido de un `INSERT`.
 8. La base de datos también defiende: `CHECK (monto > 0)`, `UNIQUE` para la idempotencia y para que una bolsa se cierre una sola vez, y restricciones de saldo por tipo de cuenta: `CHECK (saldo >= 0)` en toda cuenta salvo la única de tipo `sistema`, que cumple `CHECK (saldo <= 0)`. Esa es la única excepción y no se amplía a ninguna otra cuenta. Nunca elimines ni relajes una restricción para que algo funcione.
 9. La división es exacta y determinista: la suma de las partes siempre es igual al total. Usa las funciones de `domain/` y la regla del sobrante definida en `SPEC.md`.
-10. Tiempo: guarda en UTC e interpreta las fechas límite en `America/Bogota`. Toda función que dependa de la hora recibe `ahora` como parámetro.
+10. Tiempo: guarda en UTC e interpreta las fechas límite en `America/Bogota`. Toda función que dependa de la hora recibe `ahora` como parámetro. Solo la API y el hilo del barrido leen el reloj.
 11. Rechaza entradas inválidas: montos no enteros, cero, negativos o por encima del tope definido en `SPEC.md`, cuentas inexistentes, transferencias a uno mismo y pagos distintos a la parte exacta. Nunca redondees en silencio.
+12. Códigos HTTP: **422** si la petición es inválida por sí sola, sin importar el estado de ningún recurso (forma, monto cero, negativo o sobre el tope, transferencia a uno mismo). **409** si la petición es válida pero choca con el estado actual de un recurso o con una regla que depende de ese estado (saldo insuficiente, fuera de plazo, bolsa cerrada, ya pagó, clave reutilizada). Las dos categorías no se mezclan. Además: 400 sin `Idempotency-Key`, 401 sin sesión válida, 403 sin permiso sobre la bolsa, 404 si no existe y 503 con reintentos agotados. Todo error sale como `{"codigo": "...", "mensaje": "..."}`.
 
 Si una tarea exige romper alguna de estas reglas, detente y pregunta.
 
@@ -47,7 +49,7 @@ Si una tarea exige romper alguna de estas reglas, detente y pregunta.
 3. Solo pagos completos: cada participante paga exactamente su parte.
 4. Un participante puede retirarse mientras la bolsa esté abierta y antes de la fecha límite, haya pagado o no. Si pagó, se le devuelve su aporte en la misma transacción. La meta baja en su parte; las demás partes no cambian.
 5. Cuando lo aportado iguala la meta, todo se transfiere a la cuenta objetivo en la misma transacción del aporte o retiro que la completó. Si se retiran todos, la bolsa se cierra sin mover dinero.
-6. Al vencer sin completarse se aplica la política: `transferir` envía lo reunido a la cuenta objetivo y `devolver` le devuelve a cada uno lo suyo, en una transacción por participante.
+6. Al vencer sin completarse se aplica la política: `transferir` envía lo reunido a la cuenta objetivo y `devolver` le devuelve a cada uno lo suyo, en una transacción por participante. Solo el barrido liquida: una petición que encuentra la bolsa vencida la rechaza con 409 `fuera_de_plazo` y no mueve dinero.
 7. Si el creador cancela: con `devolver`, se devuelve el aporte de cada participante que pagó, en una transacción por participante, todas seguidas y sin esperar confirmación; con `transferir`, cada participante que pagó decide si su aporte se envía o se le devuelve. El plazo para decidir y el valor por defecto están en `SPEC.md`.
 8. Lo que se le debe devolver a cada participante se calcula desde los movimientos del libro (aportes menos devoluciones), nunca desde un contador aparte. Por eso una devolución repetida o retomada tras una falla no puede pagar de más.
 9. Una bolsa cerrada siempre tiene saldo cero. Los estados intermedios con saldo (por ejemplo, cancelada mientras se devuelve) están definidos en `SPEC.md`.
@@ -116,8 +118,9 @@ Solo lectura. Revisa el alcance indicado contra las reglas del dinero y de las b
 - Identificadores en español, sin tildes ni ñ (`transferir`, `cuenta_origen`), salvo términos técnicos estándar.
 - Simple y explícito antes que ingenioso. Funciones pequeñas y con tipos. Sin abstracciones especulativas.
 - Endpoints delgados: la lógica vive en `services/` y `domain/`.
-- Errores de dominio como excepciones propias; la API las traduce a códigos HTTP (400, 401, 404, 409, 422).
-- Una sesión de base de datos por petición. Nunca compartas sesiones entre hilos.
+- Fronteras de capas: `domain/` no importa `sqlalchemy` ni `fastapi`; `services/` no importa `fastapi`. Una prueba lo verifica.
+- Errores de dominio como excepciones propias; la API las traduce a códigos HTTP (400, 401, 403, 404, 409, 422, 503) según la regla 12 del dinero. Los ids de bolsa son UUID.
+- Una sesión de base de datos por petición. Nunca compartas sesiones entre hilos. La API no hace `commit`: el servicio es dueño de la transacción.
 
 ## Pruebas
 
@@ -127,6 +130,9 @@ Solo lectura. Revisa el alcance indicado contra las reglas del dinero y de las b
 - Hypothesis para las propiedades de `domain/`, como que la suma de las partes sea igual al total.
 - Concurrencia: hilos con conexiones separadas y verificación de invariantes al final. Casos mínimos de bolsas: último aporte contra retiro, contra cancelación y contra vencimiento, y dos aportes finales al mismo tiempo. La transferencia final ocurre una sola vez.
 - Hora fija inyectada: nada de `datetime.now()` dentro de la lógica que se prueba.
+- Barrido: se prueba llamando a `procesar_vencidas(ahora)` con hora fija. El hilo se apaga en las pruebas con la variable de entorno. Procesar dos veces no duplica movimientos y una bolsa fallida no detiene a las demás.
+- Idempotencia: dos hilos con la misma clave y el mismo cuerpo producen un solo conjunto de movimientos y la misma respuesta; la misma clave con otro cuerpo da 409.
+- Una prueba verifica las fronteras de importación de `domain/` y `services/`.
 - Nombres: `test_<comportamiento_esperado>`.
 
 ## Seguridad y límites
