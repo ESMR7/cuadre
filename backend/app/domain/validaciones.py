@@ -1,7 +1,12 @@
 """Validaciones puras de negocio (SPEC 2.1 y 5.6)."""
 
 from app.domain.constantes import TOPE_OPERACION
-from app.domain.errores import MontoInvalido, SobreElTope, TransferenciaASiMismo
+from app.domain.errores import (
+    MontoInvalido,
+    SaldoInsuficiente,
+    SobreElTope,
+    TransferenciaASiMismo,
+)
 
 
 def validar_monto(monto: object) -> int:
@@ -31,3 +36,9 @@ def validar_destino_distinto(origen_id: str, destino_id: str) -> None:
     """
     if origen_id == destino_id:
         raise TransferenciaASiMismo("No se puede transferir a la propia cuenta.")
+
+
+def validar_saldo_suficiente(saldo: int, monto: int) -> None:
+    """Rechaza si el saldo leído de la fila bloqueada es menor que el monto."""
+    if saldo < monto:
+        raise SaldoInsuficiente("Saldo insuficiente.")
