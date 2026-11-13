@@ -64,14 +64,32 @@ flowchart LR
 
 ### 1.4 Autenticación
 
+**Contraseñas y tokens: resumen**
+
+| | Contraseña | Token de sesión |
+| --- | --- | --- |
+| Quién lo crea | El usuario, al registrarse | El servidor, en cada login |
+| Cómo se genera | — | `secrets.token_urlsafe(32)`: 32 bytes aleatorios. Nunca el módulo `random`, que es predecible |
+| Cómo se guarda | scrypt (hash lento) con sal, en `usuarios.contrasena_hash` | SHA-256 en hexadecimal (hash rápido), en `sesiones.token_hash` |
+| Por qué ese hash | Las personas eligen contraseñas adivinables; un hash lento hace muy caro probar millones de ellas si alguien roba la base | El token es aleatorio y larguísimo; no hay nada que adivinar, así que basta un hash rápido |
+| Se devuelve al cliente | Nunca | Una sola vez, en la respuesta del login |
+| Aparece en logs o errores | Nunca | Nunca |
+
 **Contraseñas**
-- Se guardan solo como hash lento con sal (`scrypt`, de la librería estándar). Nunca en claro.
 - Longitud entre 8 y 128 bytes UTF-8, validada por la API. El máximo evita que una contraseña enorme convierta scrypt en un ataque a la CPU.
-- El login calcula el hash de la contraseña recibida y lo compara con el guardado.
+- **Al registrarse:**
+  1. Se genera una sal aleatoria de 16 bytes con `secrets.token_bytes(16)`.
+  2. Se calcula `hashlib.scrypt(contraseña en UTF-8, salt=sal, n=N, r=r, p=p, maxmem=..., dklen=32)`.
+  3. Se guarda en `contrasena_hash` un solo texto con el algoritmo, los parámetros, la sal y el hash, por ejemplo `scrypt$131072$8$1$<sal en base64>$<hash en base64>`.
+- **Al iniciar sesión:**
+  1. Se lee el texto guardado y se separan los parámetros, la sal y el hash.
+  2. Se recalcula scrypt con la contraseña recibida, usando esos mismos parámetros y esa sal.
+  3. Se compara el resultado con el hash guardado usando `hmac.compare_digest`, que tarda lo mismo sin importar dónde difieran. Nunca con `==`.
+- **Parámetros:** configurables. Por defecto, los mínimos que recomienda OWASP: N = 2^17, r = 8 y p = 1, con `maxmem` suficiente (unos 128 MiB por hash). En las pruebas se usa N = 2^14 para que la suite sea rápida. Como los parámetros se guardan junto a cada hash, se pueden cambiar sin invalidar las contraseñas existentes.
 
 **Sesiones y tokens**
-- Un login exitoso genera un token aleatorio y lo devuelve una sola vez al cliente.
-- En la base solo se guarda el hash SHA-256 del token. En cada petición el backend calcula el hash del token recibido y busca la sesión.
+- **Al iniciar sesión:** se genera el token con `secrets.token_urlsafe(32)`, se calcula su SHA-256 en hexadecimal (64 caracteres, como exige `ck_sesiones_hash`) y se guarda solo ese hash. El token se devuelve una sola vez al cliente y el servidor no lo conserva.
+- **En cada petición:** se calcula el SHA-256 del token recibido y se busca la sesión por `token_hash`, que tiene índice único. Si no existe o expiró, 401.
 - El token viaja en cada petición en la cabecera `Authorization: Bearer <token>`.
 - Una sola sesión activa por usuario: un login nuevo reemplaza la sesión anterior. La tabla de sesiones tiene `UNIQUE` sobre el usuario, para que dos logins simultáneos no dejen dos tokens válidos. El último login siempre tiene el token activo.
 - El token expira 20 minutos después del login. Las peticiones normales no extienden el plazo.
@@ -200,6 +218,7 @@ Las reglas de `domain/` que no dependen del estado (monto y tope, transferencia 
 - Cada caso de uso, incluidas las lecturas, abre su transacción y la confirma o revierte. Aislamiento `READ COMMITTED`.
 - La autenticación es el primer paso dentro de la transacción: sin sesión válida, 401 y `ROLLBACK`.
 - Un envoltorio repite el caso de uso completo, autenticación incluida, solo ante `40P01` y `40001`, máximo 3 veces. Si se agotan: 503 `reintentos_agotados`, y el cliente puede repetir con la misma clave.
+- El envoltorio registra cada reintento (caso de uso y código de error) en el log y en un contador que las pruebas pueden leer. Un reintento por `40P01` significa que se rompió el orden de bloqueo: las pruebas de concurrencia exigen cero (10.4).
 - Los errores de negocio y de validación no se reintentan.
 
 ### 2.4 Orden dentro de una operación
@@ -211,6 +230,10 @@ Las reglas de `domain/` que no dependen del estado (monto y tope, transferencia 
 5. Leer el estado, decidir en `domain/`, escribir en el libro y confirmar.
 
 - Las cuentas se bloquean con `FOR NO KEY UPDATE` porque su id nunca cambia. Protege el saldo igual que `FOR UPDATE`, pero no choca con el `FOR KEY SHARE` que toman las llaves foráneas al insertar filas que referencian la cuenta (8.1). La fila de la bolsa sigue con `FOR UPDATE`: después de crearla, ninguna fila nueva la referencia.
+- Las cuentas se bloquean con una sentencia por cuenta, en orden ascendente, después de quitar repetidos (por ejemplo, cuando quien paga es también la cuenta objetivo). Así el orden no depende de cómo PostgreSQL ejecute un `ORDER BY` con bloqueo.
+- El saldo de la cuenta de una bolsa se puede leer con solo el bloqueo de la fila de la bolsa, porque todo lo que mueve esa cuenta pasa antes por ese bloqueo. Para escribir en ella, la cuenta se bloquea igual que cualquier otra.
+- Toda lectura con bloqueo usa `populate_existing`. SQLAlchemy no sobrescribe un objeto que ya está en la sesión: si la cuenta se cargó antes (por ejemplo, al autenticar), la fila quedaría bloqueada pero el objeto conservaría el saldo viejo, y dos transferencias simultáneas podrían crear dinero. En SQLAlchemy, `FOR NO KEY UPDATE` se escribe `with_for_update(key_share=True)`; `with_for_update()` sin parámetros genera `FOR UPDATE`.
+- El saldo solo se modifica con `UPDATE cuentas SET saldo = saldo + :delta`, que PostgreSQL calcula sobre la fila actual. Nunca se escribe un saldo calculado en Python. Si la lectura fallara, el saldo igual quedaría correcto y `ck_cuentas_saldo` rechazaría uno negativo.
 - Primero se bloquean todas las filas que la operación va a usar, después se leen y al final se modifican. Nada que decida la operación se lee antes de bloquearlo.
 - Nunca se bloquean dos bolsas en una misma transacción. Los ciclos solo podrían aparecer si algo rompe este orden.
 
@@ -225,6 +248,8 @@ Las reglas de `domain/` que no dependen del estado (monto y tope, transferencia 
 - Misma clave y otro hash: 409 `clave_reutilizada`.
 - La clave solo persiste si la transacción confirma. Si la operación se rechaza y revierte, la clave queda libre.
 - La verificación es un `INSERT ... ON CONFLICT`, nunca un `SELECT` seguido de un `INSERT`: la restricción `UNIQUE` es lo que cierra la carrera entre peticiones simultáneas.
+- Se usa `INSERT ... ON CONFLICT DO NOTHING RETURNING clave`. Si devuelve una fila, la clave es nueva y la operación se ejecuta. Si no devuelve nada, la clave ya existía y se lee la fila guardada para comparar el hash.
+- `Idempotency-Key` acepta cualquier UUID válido. Que sea v4 es responsabilidad del cliente, porque la versión no cambia nada para el servidor.
 - Las operaciones que origina el sistema (devoluciones del barrido y transferencia final) no llevan clave (3.4).
 
 ### 2.6 Errores y HTTP
@@ -319,7 +344,7 @@ Imagen del diagrama: `docs/modelo-datos.png`.
 - `make check` detecta después cualquier violación de lo que solo impone el servicio. Las consultas están en el bloque 4.
 - Las fechas de negocio las escribe el servicio con `ahora`. No hay `DEFAULT now()`.
 - Estados y valores cerrados son `text` con `CHECK`, nunca `ENUM` de PostgreSQL.
-- Toda restricción tiene nombre explícito (`ck_`, `uq_`, `fk_`, `ix_`), para que los errores sean legibles y la API pueda traducirlos.
+- Toda restricción tiene nombre explícito (`pk_`, `ck_`, `uq_`, `fk_`, `ix_`), para que los errores sean legibles y el servicio pueda traducirlos. La traducción depende del caso de uso, no solo del nombre: `pk_cuentas` es `registro_rechazado` al registrar y `nombre_en_uso` al crear una bolsa.
 
 ### 3.2 Diagrama
 
@@ -424,7 +449,7 @@ erDiagram
 
 | Columna | Tipo | Restricciones |
 | --- | --- | --- |
-| `id` | `text COLLATE "C"` | PK |
+| `id` | `text COLLATE "C"` | PK (`pk_cuentas`) |
 | `tipo` | `text` | `NOT NULL`, `ck_cuentas_tipo`: `tipo IN ('personal', 'bolsa', 'sistema')` |
 | `saldo` | `bigint` | `NOT NULL DEFAULT 0` |
 | `creada_en` | `timestamptz` | `NOT NULL` |
@@ -433,6 +458,7 @@ erDiagram
 - `ck_cuentas_saldo`: `(tipo = 'sistema' AND saldo <= 0) OR (tipo <> 'sistema' AND saldo >= 0)`.
 - Como el id de la cuenta de sistema es fijo, solo puede existir una.
 - Como el formato del id depende del tipo, cualquier llave foránea que exija formato personal apunta, por construcción, a una cuenta personal.
+- **Formato personal** de una columna `col`, usado en las restricciones de abajo: `col ~ '^[a-z0-9_]{3,30}$' AND col <> 'sistema'`. Sin la segunda condición, `sistema` cumpliría el patrón.
 - Solo el servicio del libro contable modifica `saldo`.
 
 #### `usuarios`
@@ -440,10 +466,10 @@ erDiagram
 | Columna | Tipo | Restricciones |
 | --- | --- | --- |
 | `id` | `bigint` | PK, `GENERATED ALWAYS AS IDENTITY` |
-| `cedula` | `text` | `NOT NULL`, `UNIQUE`, `ck_usuarios_cedula`: `cedula ~ '^[0-9]{5,10}$'` |
-| `nombre_usuario` | `text COLLATE "C"` | `NOT NULL`, `UNIQUE`, `ck_usuarios_nombre`: `nombre_usuario ~ '^[a-z0-9_]{3,30}$' AND nombre_usuario <> 'sistema'` |
+| `cedula` | `text` | `NOT NULL`, `uq_usuarios_cedula`, `ck_usuarios_cedula`: `cedula ~ '^[0-9]{5,10}$'` |
+| `nombre_usuario` | `text COLLATE "C"` | `NOT NULL`, `uq_usuarios_nombre`, `ck_usuarios_nombre`: `nombre_usuario ~ '^[a-z0-9_]{3,30}$' AND nombre_usuario <> 'sistema'` |
 | `contrasena_hash` | `text` | `NOT NULL` |
-| `cuenta_id` | `text COLLATE "C"` | `NOT NULL`, `UNIQUE`, FK a `cuentas(id)` |
+| `cuenta_id` | `text COLLATE "C"` | `NOT NULL`, `uq_usuarios_cuenta`, FK a `cuentas(id)` |
 | `creado_en` | `timestamptz` | `NOT NULL` |
 
 - `ck_usuarios_cuenta`: `cuenta_id = nombre_usuario`. Ese formato solo es válido para cuentas personales, así que un usuario siempre apunta a su cuenta personal.
@@ -497,7 +523,7 @@ erDiagram
 
 | Columna | Tipo | Restricciones |
 | --- | --- | --- |
-| `cuenta_solicitante_id` | `text COLLATE "C"` | FK a `cuentas(id)`, `ck_claves_solicitante`: formato personal |
+| `cuenta_solicitante_id` | `text COLLATE "C"` | FK a `cuentas(id)`, `ck_claves_solicitante`: formato personal (3.4) |
 | `clave` | `uuid` | |
 | `operacion` | `text` | `NOT NULL`, `ck_claves_operacion`: `operacion IN ('cargar', 'transferir', 'aportar', 'retirarse')` |
 | `hash_peticion` | `text` | `NOT NULL`, `ck_claves_hash`: `hash_peticion ~ '^[0-9a-f]{64}$'` |
@@ -519,8 +545,8 @@ erDiagram
 | `nombre` | `text COLLATE "C"` | `NOT NULL`, `ck_bolsas_nombre`: `nombre ~ '^[a-z0-9_]{1,40}$'` |
 | `total` | `bigint` | `NOT NULL`, `ck_bolsas_total`: `total >= 10000`. Inmutable |
 | `cuenta_id` | `text COLLATE "C"` | `NOT NULL`, `UNIQUE`, FK a `cuentas(id)` |
-| `creador_cuenta_id` | `text COLLATE "C"` | `NOT NULL`, FK a `cuentas(id)`, formato personal |
-| `cuenta_objetivo_id` | `text COLLATE "C"` | `NOT NULL`, FK a `cuentas(id)`, formato personal |
+| `creador_cuenta_id` | `text COLLATE "C"` | `NOT NULL`, FK a `cuentas(id)`, `ck_bolsas_creador`: formato personal |
+| `cuenta_objetivo_id` | `text COLLATE "C"` | `NOT NULL`, FK a `cuentas(id)`, `ck_bolsas_objetivo`: formato personal |
 | `transferir_al_vencer` | `boolean` | `NOT NULL`, sin valor por defecto |
 | `fecha_limite` | `timestamptz` | `NOT NULL` |
 | `estado` | `text` | `NOT NULL`, `ck_bolsas_estado`: `estado IN ('abierta', 'cancelada', 'liquidando', 'cerrada')` |
@@ -537,7 +563,7 @@ erDiagram
 | Columna | Tipo | Restricciones |
 | --- | --- | --- |
 | `bolsa_id` | `uuid` | FK a `bolsas(id)` |
-| `cuenta_id` | `text COLLATE "C"` | FK a `cuentas(id)`, `ck_participantes_cuenta`: formato personal |
+| `cuenta_id` | `text COLLATE "C"` | FK a `cuentas(id)`, `ck_participantes_cuenta`: formato personal (3.4) |
 | `parte` | `bigint` | `NOT NULL`, `ck_participantes_parte`: `parte > 0` |
 | `estado` | `text` | `NOT NULL`, `ck_participantes_estado`: `estado IN ('pendiente', 'pagado', 'por_confirmar', 'retirado')` |
 
@@ -833,10 +859,12 @@ WHERE b.estado = 'cerrada'
 - `pendiente` no aportó y solo existe en bolsas abiertas.
 - `pagado` y `por_confirmar` aportaron y no recibieron devolución, y `por_confirmar` solo existe en bolsas abiertas o canceladas.
 - `retirado` con un aporte sin devolver solo existe mientras la bolsa está `liquidando`.
+- Una bolsa en `liquidando` con la política de devolver no tiene participantes en `pagado`: el paso 1 del barrido o la cancelación los pasó a `retirado`.
 
 ```sql
 WITH e AS (
     SELECT p.bolsa_id, p.cuenta_id, p.estado, b.estado AS estado_bolsa,
+           b.transferir_al_vencer AS transferir,
            EXISTS (SELECT 1 FROM transacciones t
                    WHERE t.tipo = 'aporte'
                      AND t.cuenta_origen_id = p.cuenta_id
@@ -853,7 +881,8 @@ FROM e
 WHERE (estado = 'pendiente' AND (aporto OR estado_bolsa <> 'abierta'))
    OR (estado IN ('pagado', 'por_confirmar') AND (NOT aporto OR devuelto))
    OR (estado = 'por_confirmar' AND estado_bolsa NOT IN ('abierta', 'cancelada'))
-   OR (estado = 'retirado' AND aporto AND NOT devuelto AND estado_bolsa <> 'liquidando');
+   OR (estado = 'retirado' AND aporto AND NOT devuelto AND estado_bolsa <> 'liquidando')
+   OR (estado = 'pagado' AND estado_bolsa = 'liquidando' AND NOT transferir);
 ```
 
 **B10. El estado de la bolsa coincide con la transferencia final** (reglas 5 y 6 de las bolsas).
@@ -918,7 +947,8 @@ Entrada: `nombre_usuario`, `cedula` y `contrasena`.
 - La API convierte `nombre_usuario` a minúsculas y después valida `^[a-z0-9_]{3,30}$` y que no sea `sistema`. Tildes, ñ, espacios, guiones u otros caracteres: 422 `forma_invalida`.
 - La API valida la cédula (`^[0-9]{5,10}$`, como texto) y la contraseña (entre 8 y 128 bytes UTF-8). Fuera de eso: 422 `forma_invalida`.
 - El servicio, en una sola transacción: calcula el hash scrypt, inserta la cuenta personal (id igual al nombre de usuario, saldo 0, `creada_en = ahora`) y después el usuario.
-- Nombre o cédula ya registrados: la base lo rechaza por sus restricciones de unicidad y el servicio lo traduce a 409 `registro_rechazado`, el mismo código para ambos casos. Dos registros simultáneos con el mismo nombre: el segundo espera en el índice único y recibe 409.
+- Nombre o cédula ya registrados: la base lo rechaza y el servicio lo traduce a 409 `registro_rechazado`, el mismo código para ambos casos. Las restricciones que dan ese código son `pk_cuentas` (un nombre repetido choca primero aquí, porque la cuenta se inserta antes que el usuario), `uq_usuarios_nombre`, `uq_usuarios_cedula` y `uq_usuarios_cuenta`. Dos registros simultáneos con el mismo nombre: el segundo espera en la llave y recibe 409.
+- Todo patrón se valida contra el texto completo, con el `pattern` de Pydantic o con `re.fullmatch`. Nunca con `re.match` y `$`, que acepta un salto de línea final: `"ana\n"` pasaría la API y la base lo rechazaría con un 500. Prueba: registrar `"ana\n"` da 422 `forma_invalida`.
 - No inicia sesión: el usuario hace login aparte.
 - No lleva clave de idempotencia. Un reintento tras perder la respuesta recibe 409 aunque la cuenta sí se creó (supuesto: el frontend no reintenta solo).
 - Respuesta: el nombre de usuario y la fecha de creación. Nunca la cédula ni el hash.
@@ -1030,7 +1060,8 @@ LIMIT :cantidad OFFSET :desde;
 - **Meta:** la suma de las partes de los participantes activos. No se guarda: se calcula.
 - **Creador:** es participante y aporta su parte, que incluye el sobrante. Puede retirarse como cualquiera y, aunque se haya retirado, sigue siendo el único que puede cancelar.
 - **Política:** solo `transferir_al_vencer`. Si se retiran participantes, la meta baja y se transfiere lo de quienes quedan; no se exige el total original. Políticas como "exigir el total" quedan fuera de alcance.
-- **Vigencia:** la bolsa admite operaciones de usuario mientras `ahora < fecha_limite`. Desde la fecha límite, toda operación de usuario sobre la bolsa da 409 `fuera_de_plazo` y solo el barrido la liquida.
+- **Vigencia:** la bolsa admite operaciones de usuario mientras `ahora < fecha_limite`. Desde la fecha límite, toda operación de usuario sobre la bolsa da 409 `fuera_de_plazo`, salvo que la bolsa ya haya cambiado de estado, en cuyo caso da `estado_invalido` (8.2). Solo el barrido la liquida.
+- **Cierre en cero:** antes de pasar una bolsa a `cerrada`, el servicio comprueba que el saldo de su cuenta es 0. Si no lo es, registra un error y revierte la transacción.
 - **Consentimiento:** nada se envía a la cuenta objetivo sin que el participante esté en `pagado`, es decir, sin que haya aceptado los términos vigentes.
 
 ### 6.2 Crear
@@ -1045,7 +1076,7 @@ Entrada: `nombre`, `total`, `participantes` (nombres de usuario, incluido el cre
   - Calcula las partes (6.3).
 - **Servicio:** verifica que cada participante y la cuenta objetivo sean cuentas personales; si alguno no lo es, 404 `no_encontrado`. Inserta en una transacción la cuenta de la bolsa, la bolsa (`abierta`, `creada_en = ahora`) y los participantes (`pendiente`). Si el creador ya tiene una bolsa con ese nombre, la llave primaria de la cuenta lo rechaza: 409 `nombre_en_uso`.
 - No mueve dinero ni lleva clave. No hay bloqueos explícitos: las llaves foráneas toman `FOR KEY SHARE` sobre las cuentas referenciadas, que no choca con `FOR NO KEY UPDATE` (8.1).
-- Respuesta: el id de la bolsa, sus términos y la parte de cada participante.
+- Respuesta: 201 con el mismo cuerpo que `GET /bolsas/{id}` (9.4).
 
 ### 6.3 División
 
@@ -1153,7 +1184,7 @@ Con `Idempotency-Key`, haya pagado o no.
   - Si había pagado, se hace una devolución por la deuda, recalculada desde el libro.
   - El participante pasa a `retirado`.
   - Todos los demás participantes en `pagado` pasan a `por_confirmar`. Esto ocurre con cualquier retiro, porque la meta baja aunque quien se retira no hubiera pagado.
-- **Cierre:** si no quedan activos, la bolsa pasa a `cerrada`. Su saldo ya es 0, porque cada retiro con pago devolvió el aporte.
+- **Cierre:** si no quedan activos, la bolsa pasa a `cerrada`. Su saldo debería ser 0, porque cada retiro con pago devolvió el aporte; el servicio lo comprueba antes de cerrar (6.1).
 - **Un retiro nunca completa la bolsa:** quienes ya pagaron quedan por confirmar.
 - **Clave:** apunta a la devolución, o queda sin transacción si no había pagado.
 
@@ -1203,7 +1234,7 @@ Sin cuerpo y sin clave.
   - La bolsa está `abierta`; si no, 409 `estado_invalido`.
   - `ahora < fecha_limite`; si no, 409 `fuera_de_plazo`.
 - No lleva clave y no mueve dinero.
-- **Con `transferir_al_vencer` falso (devolver):** todos los participantes pasan a `retirado`. Si el saldo de la bolsa es 0, pasa a `cerrada`. Si no, pasa a `liquidando` y el barrido devuelve en el siguiente ciclo (hasta 60 s).
+- **Con `transferir_al_vencer` falso (devolver):** todos los participantes pasan a `retirado`. Si el saldo de la cuenta de la bolsa, leído con el bloqueo de su fila (2.4), es 0, pasa a `cerrada`. Si no, pasa a `liquidando` y el barrido devuelve en el siguiente ciclo (hasta 60 s).
 - **Con `transferir_al_vencer` verdadero:** los `pendiente` pasan a `retirado` y los `pagado` a `por_confirmar`. Si no queda ningún activo, la bolsa pasa a `cerrada`. Si queda alguno, pasa a `cancelada`.
 - **En `cancelada`:** cada participante confirma (su aporte se enviará) o se retira (se le devuelve en el acto) hasta la fecha límite. Cuando todos los activos están en `pagado`, se hace la transferencia final y la bolsa se cierra. Si todos se retiran, se cierra sin transferencia.
 - No hay decisiones aparte ni un plazo propio: rige la fecha límite.
@@ -1238,13 +1269,19 @@ ORDER BY fecha_limite, id;
 Para cada bolsa, cada paso es una transacción propia que empieza bloqueando la fila de la bolsa y releyendo su estado:
 
 1. **Preparar.** Solo si la bolsa está `abierta` o `cancelada` y `ahora >= fecha_limite`. Los `pendiente` y `por_confirmar` pasan a `retirado`; con `devolver`, también los `pagado`. La bolsa pasa a `liquidando`. No mueve dinero.
-2. **Devolver.** Por cada participante `retirado` con deuda mayor que 0, calculada desde el libro: bloquea por id ascendente la cuenta de la bolsa y la del participante, relee la deuda y hace la devolución. Una transacción por participante.
-3. **Cerrar.** Si queda algún `retirado` con deuda, no cierra y el siguiente ciclo retoma. Si el saldo de la bolsa es mayor que 0, solo quedan participantes en `pagado` con la política de transferir: bloquea por id ascendente la cuenta de la bolsa y la cuenta objetivo, y hace la transferencia final por el saldo. La bolsa pasa a `cerrada`.
+2. **Devolver.** Solo si la bolsa está `liquidando`. Por cada participante `retirado` con deuda mayor que 0, calculada desde el libro: bloquea por id ascendente la cuenta de la bolsa y la del participante, relee la deuda y hace la devolución. Una transacción por participante.
+3. **Cerrar.** Solo si la bolsa está `liquidando`. Si queda algún `retirado` con deuda, no cierra y el siguiente ciclo retoma. Si el saldo es 0, la bolsa pasa a `cerrada`. Si el saldo es mayor que 0, solo hace la transferencia final si se cumplen las tres condiciones:
+   - la política es `transferir_al_vencer` verdadero;
+   - quedan participantes en `pagado`;
+   - el saldo es exactamente la suma de sus partes.
+
+   Si se cumplen, bloquea por id ascendente la cuenta de la bolsa y la cuenta objetivo, hace la transferencia final por el saldo y la bolsa pasa a `cerrada`. Si alguna falla, registra un error, no mueve dinero y la bolsa queda en `liquidando` para revisión.
 
 - **Repetir es seguro:** cada paso relee tras bloquear, así que repetir el barrido no paga de más.
 - **Fallos:** si una bolsa falla, se registra el error y el barrido sigue con las demás. La bolsa queda en `liquidando` y el siguiente ciclo la retoma.
 - **Deuda negativa:** se reporta como error y no mueve dinero.
-- Con la política de devolver nunca queda saldo en el paso 3, porque todos están en `retirado`.
+- En un flujo correcto, el paso 3 nunca encuentra saldo con la política de devolver, porque todos están en `retirado`. Si pasa, es un error previo: el paso 3 no envía ese dinero y B9 reporta la bolsa.
+- Cada paso es una función propia del servicio; `procesar_vencidas` las llama en orden, y las pruebas pueden llamarlas por separado (10.7).
 
 ### 7.5 Riesgos aceptados
 
@@ -1289,29 +1326,41 @@ Para cada bolsa, cada paso es una transacción propia que empieza bloqueando la 
 
 ### 8.4 Choques y resultado esperado
 
-Cada fila tiene una prueba de concurrencia con hilos y conexiones separadas, que termina corriendo todas las invariantes (sección 10).
+Datos por defecto: una bolsa de $90.000 entre ana (creadora), beto y carla, con partes de $30.000, cuenta objetivo `olga` y política de transferir. Todos tienen saldo suficiente, salvo que la fila diga otra cosa.
 
-| Choque | Si gana A | Si gana B | Lo que garantiza que no haya error |
-| --- | --- | --- | --- |
-| Dos transferencias desde una cuenta que juntas superan el saldo | La primera pasa y la segunda da 409 `saldo_insuficiente` | Igual | El saldo se lee de la fila ya bloqueada y `ck_cuentas_saldo` |
-| A transfiere a B y B transfiere a A | Ambas pasan, una después de la otra | Igual | El orden por id |
-| Misma clave y mismo cuerpo, dos hilos | Se ejecuta una; la otra espera en el `INSERT` y recibe el resultado original | Igual | La llave primaria de la clave |
-| Misma clave con otro cuerpo | Una se ejecuta; la otra da 409 `clave_reutilizada` | Si la primera revierte, la segunda se ejecuta | La llave primaria y el hash |
-| 100 cargas simultáneas | Todas pasan, en fila por `sistema` | — | L3 y L4 |
-| 100 transferencias simultáneas desde una misma cuenta | Pasan en fila hasta agotar el saldo; las demás dan 409 `saldo_insuficiente`, sin deadlocks | — | `FOR NO KEY UPDATE` (8.1) y el saldo leído tras bloquear |
-| Los dos últimos pendientes aportan a la vez | El primero queda `pagado`; el segundo completa y transfiere | Igual, en el otro orden | El bloqueo de la bolsa y `uq_transferencia_final_unica` |
-| Último aporte contra el retiro de otro participante | El aporte completa y cierra; el retiro da 409 `estado_invalido` | El retiro devuelve y pasa a los pagados a `por_confirmar`; el aporte queda en `pagado` sin completar | El bloqueo de la bolsa y el estado releído (B10) |
-| Última confirmación contra un retiro | La confirmación cierra; el retiro da 409 `estado_invalido` | El retiro deja a los demás por confirmar; la confirmación no completa | Igual |
-| Último aporte contra cancelación | El aporte cierra; cancelar da 409 `estado_invalido` | Cancela; el aporte da 409 `estado_invalido` | Igual |
-| Último aporte contra vencimiento | El aporte cierra; el barrido relee `cerrada` y la omite | El barrido marca `liquidando`; el aporte da 409 `estado_invalido` | Igual, más B7 |
-| Retiro contra cancelación con `transferir` | El retiro devuelve; después se cancela | Cancela; el retiro en `cancelada` devuelve en el acto | Igual |
-| Retiro contra cancelación con `devolver` | El retiro devuelve; después se cancela | Cancela; el retiro da 409 `estado_invalido` y el barrido devuelve | La deuda se calcula desde el libro |
-| Cancelación contra vencimiento | Cancela; el barrido ve la fecha cumplida y liquida | El barrido liquida; cancelar da 409 `estado_invalido` | El bloqueo de la bolsa |
-| Dos barridos a la vez (por error, con dos workers) | Cada paso relee tras bloquear; el segundo no encuentra nada que hacer | Igual | La deuda releída y los índices únicos |
-| Retiro repetido con otra clave | El primero devuelve; el segundo da 409 `estado_invalido` | — | `uq_devolucion_unica` como respaldo |
-| Aporte contra una transferencia saliente del mismo pagador | Se esperan en la cuenta del pagador; la segunda puede dar 409 `saldo_insuficiente` | Igual | El bloqueo de la cuenta, sin deadlock (8.1) |
-| Aportes del mismo usuario a dos bolsas distintas | Ambos pasan | — | Nunca se bloquean dos bolsas en una transacción |
-| Crear una bolsa contra una transferencia entre el creador y la cuenta objetivo | Ambas pasan | — | `FOR KEY SHARE` no choca con `FOR NO KEY UPDATE` (8.1) |
+Cada fila tiene dos pruebas secuenciales, sin hilos: A y luego B, y B y luego A. Verifican el resultado exacto de cada columna. Las filas marcadas en la última columna tienen además una prueba con hilos (10.4).
+
+| Choque | Datos de partida | Si A va primero | Si B va primero | Lo que lo garantiza | Hilos |
+| --- | --- | --- | --- | --- | --- |
+| Dos transferencias que juntas superan el saldo | ana tiene $100.000; dos transferencias de $60.000 a beto | La primera pasa; la segunda da 409 `saldo_insuficiente` | Igual | Saldo leído de la fila bloqueada y `ck_cuentas_saldo` | Sí |
+| Transferencias cruzadas | ana y beto tienen $100.000; se envían $10.000 entre sí | Ambas pasan | Igual | Orden por id | Sí |
+| Misma clave y mismo cuerpo | ana tiene $100.000; dos transferencias idénticas con la misma clave | Una se ejecuta; la otra recibe el resultado original | Igual | Llave primaria de la clave | Sí |
+| Misma clave con otro cuerpo | Transferencias de $10.000 y $20.000 con la misma clave | La primera se ejecuta; la otra da 409 `clave_reutilizada` | Igual | Llave primaria y hash | Sí |
+| 100 cargas simultáneas | ana sin saldo; 100 cargas de $1.000 | Todas pasan, en fila por `sistema` | — | L3 y L4 | Sí |
+| 100 transferencias desde una cuenta | ana tiene $1.000.000; 100 transferencias de $20.000 con 20 hilos | 50 pasan y 50 dan 409 `saldo_insuficiente` | — | `FOR NO KEY UPDATE`, saldo tras bloquear, cero reintentos | Sí |
+| Dos últimos pendientes aportan | ana pagó; beto y carla pendientes | El primero queda `pagado`; el segundo completa y transfiere $90.000 | Igual | Bloqueo de la bolsa y `uq_transferencia_final_unica` | Sí |
+| Último aporte contra el retiro de otro | ana y beto pagaron; carla aporta y beto se retira | El aporte cierra y transfiere $90.000; el retiro da 409 `estado_invalido` | beto recibe $30.000 y ana pasa a `por_confirmar`; carla queda `pagado` sin completar | Bloqueo de la bolsa y B10 | Sí |
+| Último aporte contra el retiro del único otro participante | Bolsa de $60.000 entre ana (creadora, pendiente) y beto (pagó); ana aporta y beto se retira | El aporte cierra y transfiere $60.000; el retiro da 409 | beto recibe $30.000; ana queda como única activa, su aporte completa y transfiere $30.000 | Bloqueo de la bolsa; meta reducida (6.1) | No |
+| Última confirmación contra un retiro | Bolsa de $120.000 con dani; dani se retiró, beto y carla confirmaron, ana sigue en `por_confirmar`; ana confirma y beto se retira | La confirmación cierra y transfiere $90.000; el retiro da 409 | beto recibe $30.000 y carla pasa a `por_confirmar`; ana confirma sin completar | Bloqueo de la bolsa y B10 | Sí |
+| Dos confirmaciones finales | Bolsa de $120.000; dani se retiró, carla confirmó; ana y beto en `por_confirmar` confirman a la vez | La primera queda `pagado`; la segunda completa y transfiere $90.000 | Igual | Bloqueo de la bolsa y `uq_transferencia_final_unica` | Sí |
+| Último aporte contra cancelación | ana y beto pagaron; carla aporta y ana cancela | El aporte cierra; cancelar da 409 `estado_invalido` | carla pasa a `retirado`, ana y beto a `por_confirmar` y la bolsa a `cancelada`; el aporte da 409 | Bloqueo de la bolsa | No |
+| Última confirmación contra cancelación | Datos de "última confirmación contra un retiro", con carla como creadora; ana confirma y carla cancela | La confirmación cierra; cancelar da 409 | beto y carla pasan a `por_confirmar` y la bolsa a `cancelada`; ana confirma sin completar | Bloqueo de la bolsa | No |
+| Último aporte contra vencimiento | ana y beto pagaron; carla aporta antes de la fecha límite y el barrido corre al cumplirse | El aporte cierra; el barrido la omite | El barrido marca `liquidando` y retira a carla; el aporte da 409; después transfiere $60.000 | Bloqueo de la bolsa y B7 | No |
+| Última confirmación contra vencimiento | Datos de "última confirmación contra un retiro"; ana confirma antes de la fecha y el barrido corre al cumplirse | La confirmación cierra y transfiere $90.000 | El barrido retira a ana y le devuelve $30.000; la confirmación da 409; se transfieren $60.000 | Bloqueo de la bolsa | No |
+| Retiro contra vencimiento con transferir | ana y beto pagaron; beto se retira antes de la fecha y el barrido corre al cumplirse | beto recibe $30.000 y ana pasa a `por_confirmar`; el barrido retira a ana y le devuelve $30.000; no hay transferencia final | El barrido marca `liquidando`; el retiro da 409; se transfieren $60.000, incluidos los de beto | Bloqueo de la bolsa (resultado aceptado en 8.3) | No |
+| Retiro contra vencimiento con devolver | Lo mismo, con la política de devolver | beto recibe $30.000 en el acto; el barrido devuelve a ana | El retiro da 409; el barrido devuelve $30.000 a cada uno | Deuda calculada desde el libro | No |
+| Retiro de un pagado contra cancelación con transferir | ana y beto pagaron; beto se retira y ana cancela | beto recibe $30.000 y ana pasa a `por_confirmar`; al cancelar, carla sale y la bolsa queda `cancelada` | Cancela: carla sale, ana y beto a `por_confirmar`; el retiro de beto devuelve $30.000 en el acto | Bloqueo de la bolsa | No |
+| Retiro de un pendiente contra cancelación con transferir | ana y beto pagaron; carla (pendiente) se retira y ana cancela | carla sale y ana y beto pasan a `por_confirmar`; la cancelación deja la bolsa `cancelada` | La cancelación retira a carla; su retiro da 409 `estado_invalido` | Bloqueo de la bolsa | No |
+| Retiro contra cancelación con devolver | Política de devolver; ana y beto pagaron; beto se retira y ana cancela | beto recibe $30.000; al cancelar, todos pasan a `retirado` y el barrido devuelve a ana | Todos pasan a `retirado`; el retiro da 409; el barrido devuelve $30.000 a cada uno | Deuda calculada desde el libro | No |
+| Retiro de los dos últimos activos | carla se retiró; ana y beto (en `por_confirmar`) se retiran a la vez | El primero recibe $30.000; el segundo también y la bolsa se cierra con saldo 0 | Igual | Bloqueo de la bolsa y B8 | Sí |
+| Cancelación contra vencimiento | ana cancela antes de la fecha y el barrido corre al cumplirse | La bolsa queda `cancelada`; el barrido la liquida por fecha cumplida | El barrido liquida; cancelar da 409 | Bloqueo de la bolsa | No |
+| Dos barridos a la vez | Bolsa vencida con la política de devolver; ana y beto pagaron | Cada paso relee tras bloquear: una sola devolución por participante | Igual | Deuda releída y `uq_devolucion_unica` | Sí |
+| Retiro repetido con otra clave | beto pagó; dos retiros con claves distintas | El primero devuelve $30.000; el segundo da 409 `estado_invalido` | Igual | `uq_devolucion_unica` como respaldo | Sí |
+| Aporte contra una transferencia saliente del mismo pagador | carla tiene $40.000; aporta $30.000 y transfiere $20.000 a beto | El aporte pasa; la transferencia da 409 `saldo_insuficiente` | La transferencia pasa; el aporte da 409 | Bloqueo de la cuenta del pagador | Sí |
+| Aportes del mismo usuario a dos bolsas | carla tiene $60.000 y debe $30.000 en dos bolsas | Ambos pasan | Igual | Nunca dos bolsas en una transacción | Sí |
+| Crear una bolsa contra una transferencia entre el creador y la cuenta objetivo | ana crea una bolsa con objetivo `olga` mientras olga transfiere a ana | Ambas pasan, con cero reintentos | Igual | `FOR KEY SHARE` no choca con `FOR NO KEY UPDATE` (8.1) | Sí |
+
+- **Retiro contra vencimiento con transferir:** los resultados de las dos columnas son muy distintos. Si el barrido obtiene el bloqueo primero, beto pierde su retiro aunque llegó antes de la fecha límite, y sus $30.000 se envían a la cuenta objetivo. Se acepta: la ventana es de milisegundos y beto había aceptado esa política al pagar (8.2 y 8.3).
 
 ---
 
@@ -1326,9 +1375,9 @@ Cada fila tiene una prueba de concurrencia con hilos y conexiones separadas, que
 - **Autenticación:** `Authorization: Bearer <token>`. El token lo genera el servidor en el login (1.4); el cliente lo guarda y lo envía. Sin la cabecera, con un formato inválido o con un token expirado: 401 `no_autenticado`.
 - **Idempotencia:** `Idempotency-Key` con un UUID v4 en `cargar`, `transferir`, `aportar` y `retirarse`. Sin ella: 400 `falta_clave_idempotencia`. Si no es un UUID: 422 `forma_invalida`.
 - **Normalización:** la API valida la forma y normaliza (nombres en minúsculas) antes de llamar al servicio. El servicio calcula el hash de idempotencia sobre la operación, los ids de la ruta y la petición ya normalizada, en JSON con las llaves ordenadas y sin espacios. Así, `"Ana"` y `"ana"` son la misma intención.
-- **Reintentos:** un reintento devuelve el mismo código y el mismo cuerpo que el original, sin ninguna señal de que fue un reintento.
+- **Reintentos:** el reintento de una operación que ya confirmó devuelve el mismo código y el mismo cuerpo que el original, sin ninguna señal de que fue un reintento. Si la operación original fue rechazada, su clave quedó libre y el reintento se ejecuta como si fuera nuevo (5.6).
 - **Errores:** `{"codigo": "...", "mensaje": "..."}`. Para `forma_invalida` se agrega `campos`, con los nombres de los campos inválidos. Las rutas desconocidas dan 404 `no_encontrado` y los métodos no permitidos, 405 `metodo_no_permitido`, en el mismo formato.
-- **CORS:** solo para el origen del frontend, configurable por variable de entorno (por defecto `http://localhost:5173`).
+- **CORS:** solo para el origen del frontend, configurable por variable de entorno (por defecto `http://localhost:4200`, el servidor de desarrollo de Angular).
 
 ### 9.2 Endpoints
 
@@ -1353,6 +1402,8 @@ Cada fila tiene una prueba de concurrencia con hilos y conexiones separadas, que
 | `GET /health` | No | No | 200 | Salud del servicio |
 
 - **Paginación:** `desde` empieza en 0 y `cantidad` es 20 por defecto, con un máximo de 100. Fuera de rango: 422 `forma_invalida`.
+- **Id de bolsa que no es un UUID:** 422 `forma_invalida`, porque es inválido por sí solo.
+- **Cuerpos:** en las operaciones con cuerpo, un campo desconocido da 422 `forma_invalida`. En las operaciones sin cuerpo (aportar, retirarse, confirmar, cancelar, renovar), cualquier cuerpo enviado se ignora.
 - **Rutas de una bolsa:** si la bolsa no existe, 404 `no_encontrado`; si quien pide no figura en ella, 403 `sin_permiso`.
 - **Orden de `GET /bolsas`:** de la más reciente a la más antigua por fecha de creación.
 
@@ -1432,6 +1483,43 @@ POST /bolsas/{id}/cancelacion
 - **Confirmar y cancelar:** no llevan clave, así que no se reconstruyen. Devuelven el estado en el momento de la operación.
 - **Aviso al iniciar sesión:** el frontend consulta `GET /bolsas` y muestra un aviso si alguna bolsa `abierta` o `cancelada` tiene `mi_estado` en `pendiente` o `por_confirmar`. No hay notificaciones por correo ni push (11.1).
 
+### 9.5 Frontend
+
+**Tecnología**
+- Angular con TypeScript, como aplicación separada que solo habla con la API de este documento. No cambia nada del backend: se puede reemplazar por otro cliente sin tocar la API.
+- Peticiones con el cliente HTTP de Angular. Un interceptor agrega `Authorization: Bearer <token>` a cada petición autenticada.
+
+**Reglas que el frontend debe cumplir**
+- **Clave de idempotencia:** se genera con `crypto.randomUUID()` cuando el usuario inicia una intención (por ejemplo, al pulsar "Transferir") y se reutiliza en todos los reintentos de esa misma intención. Una intención nueva lleva una clave nueva. Nunca se genera una clave nueva para reintentar.
+- **No reintentar solo** las operaciones sin clave (registro, crear bolsa, confirmar, cancelar).
+- **Antes de confirmar o aportar,** consultar la bolsa y avisar si la meta cambió (6.7).
+- **Al iniciar sesión,** mostrar un aviso si hay bolsas pendientes o por confirmar (9.4).
+- **Errores:** decidir qué mostrar según `codigo`, nunca según el número HTTP ni el texto del mensaje.
+- **Montos:** mostrar en pesos con separador de miles (`$100.000`). El usuario los escribe como enteros; nunca se convierten a decimal.
+- **Fechas:** mostrar en `America/Bogota` y enviar la fecha límite con su zona horaria.
+
+**Estilo visual**
+
+Los colores y el estilo siguen el enunciado del reto de HabiCapital. Los valores se tomaron de las capturas del enunciado. La app se llama Cuadre: no usa el logo ni la marca de HabiCapital.
+
+| Uso | Color | Dónde aparece en el enunciado |
+| --- | --- | --- |
+| Primario: títulos y botones principales | `#491793` (morado) | Título "Practicantes" |
+| Acento secundario | `#9333E9` (morado claro) | Ícono del logo |
+| Etiquetas y estados positivos | `#1CB4AB` (turquesa) | "Reto técnico · Convocatoria 2027" |
+| Alertas, errores y borde superior de tarjetas | `#FF5958` (coral) | "La regla que no se negocia" y borde de las tarjetas |
+| Fondo de alertas | `#FFF6F6` (rosado muy claro) | Recuadro de la regla |
+| Texto principal | `#171717` | Títulos y texto destacado |
+| Texto secundario | `#4B5260` | Descripciones |
+| Bordes y separadores | `#E4E8EE` | Bordes de tarjetas y línea bajo el encabezado |
+| Fondo | `#FFFFFF` | Página |
+
+- **Tipografía:** sans-serif geométrica. Títulos en negrita muy marcada. Etiquetas pequeñas en mayúsculas, con espaciado entre letras amplio y en turquesa o coral. La fuente exacta se elige al implementar, entre las gratuitas de Google Fonts, comparándola con el enunciado.
+- **Tarjetas:** fondo blanco, borde de 1 px `#E4E8EE`, esquinas redondeadas (unos 12 px) y una franja coral en el borde superior, como las tarjetas de los casos de uso del enunciado. Se usan para cada bolsa y cada movimiento.
+- **Alertas:** fondo `#FFF6F6`, borde coral de 1 px, esquinas redondeadas, etiqueta en mayúsculas coral y texto en `#171717` y `#4B5260`, como el recuadro "La regla que no se negocia". Se usan para errores, avisos de bolsas por confirmar y cambios de términos.
+- **Encabezado:** fondo blanco con una línea inferior `#E4E8EE`.
+- Los colores se definen una sola vez como variables de CSS y todos los componentes los usan desde ahí.
+
 ---
 
 ## 10. Riesgos, defensas y pruebas
@@ -1444,8 +1532,9 @@ POST /bolsas/{id}/cancelacion
 | Una transacción crea o pierde dinero | Partida doble: el servicio construye las dos patas y verifica la suma cero antes de confirmar | L1, L2 y L4 al final de cada prueba |
 | Saldo descuadrado respecto a sus movimientos | El saldo se actualiza en la misma transacción que el movimiento | L3 |
 | Saldo negativo por operaciones simultáneas | Bloqueo de la cuenta, saldo leído tras bloquear y `ck_cuentas_saldo` | 100 transferencias simultáneas desde una cuenta |
+| Saldo leído de una copia vieja en la sesión | `populate_existing` en toda lectura con bloqueo y saldo modificado con `saldo = saldo + :delta` (2.4) | Prueba de lectura fresca (10.3) |
 | Doble cobro por un reintento | Clave de idempotencia con `INSERT ... ON CONFLICT` y hash de la petición | Dos hilos con la misma clave; misma clave con otro cuerpo |
-| Deadlocks | Un solo orden de bloqueo, `FOR NO KEY UPDATE` y reintento acotado | Las pruebas de choques de 8.4 sin respuestas 503 |
+| Deadlocks | Un solo orden de bloqueo, `FOR NO KEY UPDATE` y reintento acotado | Las pruebas con hilos de 8.4 terminan con cero reintentos por `40P01`, según el contador del envoltorio |
 | Transferencia final duplicada | Bloqueo de la bolsa y `uq_transferencia_final_unica` | Dos aportes finales simultáneos; B6 |
 | Devolución doble o de más | Deuda calculada desde el libro tras bloquear y `uq_devolucion_unica` | Barrido ejecutado dos veces; B5 |
 | División que no suma el total | `domain/` divide y el creador paga el sobrante | Hypothesis; B3 |
@@ -1487,17 +1576,30 @@ POST /bolsas/{id}/cancelacion
 | Capas | `tests/test_capas.py` | `domain/` y `services/` no importan lo prohibido | Revisión de los imports |
 
 - Nombres: `test_<comportamiento_esperado>`. Hora siempre inyectada: nada de `datetime.now()` en la lógica que se prueba.
+- **Prueba de lectura fresca** (en `tests/services/`, determinista y sin hilos):
+  1. La sesión 1 carga la cuenta de Ana, con $100.000.
+  2. Con otra sesión, Ana transfiere $60.000 y confirma.
+  3. La sesión 1 hace la lectura con bloqueo del servicio del libro y la prueba exige que vea $40.000.
+  4. Si se quita `populate_existing`, la prueba ve $100.000 y falla.
+- **Prueba de reintento tras un cambio de estado:** aportar con una clave, retirarse y repetir el aporte con la misma clave devuelve el 201 original, sin mover dinero y sin un 409.
 
 ### 10.4 Pruebas de concurrencia
 
+Cada fila de la tabla 8.4 tiene dos tipos de prueba.
+
+**Secuenciales (todas las filas).** Dos pruebas por fila, sin hilos: A y luego B, y B y luego A, cada operación con su propia sesión. Verifican el resultado exacto de cada columna. Son deterministas: el orden lo fija la prueba.
+
+**Con hilos (filas marcadas).** Comprueban que los bloqueos funcionan cuando las operaciones ocurren de verdad al mismo tiempo.
+
 - Cada hilo usa su propia sesión y su propia conexión. El pool de las pruebas tiene al menos tantas conexiones como hilos.
 - Una barrera (`threading.Barrier`) hace que los hilos arranquen a la vez.
-- El orden en que gana cada hilo no se controla. La prueba verifica tres cosas:
+- La prueba verifica cuatro cosas:
   1. El resultado es uno de los permitidos por la tabla 8.4.
   2. Se cumplen las reglas que valen en cualquier orden, por ejemplo, "exactamente una transferencia final".
   3. Las invariantes pasan, y no hay respuestas 503 ni errores inesperados.
-- Los choques de bolsas se repiten 10 veces, cada vez con datos nuevos, para que aparezcan los dos órdenes.
-- **Ejemplo, 100 transferencias:** una cuenta con $1.000.000 hace 100 transferencias de $20.000 con 20 hilos. Exactamente 50 pasan, 50 dan 409 `saldo_insuficiente` y el saldo final es 0.
+  4. El contador del envoltorio marca cero reintentos por `40P01` (2.3). Un deadlock que el reintento resolvió también hace fallar la prueba.
+- Las filas de bolsas se repiten 10 veces, cada vez con datos nuevos. Las repeticiones buscan problemas de bloqueo; los dos órdenes ya los cubren las pruebas secuenciales.
+- **Ejemplo, 100 transferencias:** una cuenta con $1.000.000 hace 100 transferencias de $20.000 con 20 hilos. Exactamente 50 pasan, 50 dan 409 `saldo_insuficiente`, el saldo final es 0 y no hay reintentos.
 - **Ejemplo, dos aportes finales:** la bolsa queda `cerrada`, con dos aportes y una sola transferencia final.
 
 ### 10.5 Pruebas de las invariantes
@@ -1508,7 +1610,7 @@ POST /bolsas/{id}/cancelacion
   2. Introduce por SQL directo una violación concreta, saltándose el servicio.
   3. Comprueba que la consulta la reporta.
 - Ejemplo para L3: `UPDATE cuentas SET saldo = saldo + 1 WHERE id = 'ana'` y la consulta de L3 debe devolver `ana`.
-- Estas pruebas dejan la base inválida a propósito, así que no corren las invariantes al terminar: solo vacían la base.
+- Estas pruebas, y la del estado inválido del barrido (10.7), dejan la base inválida a propósito, así que no corren las invariantes al terminar: solo vacían la base. Son las únicas excepciones.
 
 ### 10.6 Romper el código a propósito (opcional)
 
@@ -1516,17 +1618,19 @@ POST /bolsas/{id}/cancelacion
 - Casos:
   - Quitar el bloqueo de la cuenta en transferir: debe fallar la prueba de 100 transferencias.
   - Quitar el sobrante de la división: debe fallar la propiedad de Hypothesis.
-  - Quitar la revisión del estado en aportar: debe fallar la prueba de dos aportes finales.
+  - Quitar el bloqueo de la fila de la bolsa en aportar: en la prueba de dos aportes finales ninguno completa la bolsa, y B10 reporta una bolsa abierta sin pendientes.
 - Cada cambio se revierte apenas se ve fallar la prueba.
 
 ### 10.7 Barrido
 
-- `procesar_vencidas(ahora)` se prueba con hora fija:
-  - Vencimiento con cada política.
-  - Participantes en `por_confirmar`.
-  - Reanudación de una bolsa que quedó en `liquidando`.
-  - Dos ejecuciones seguidas sin pagar de más.
-  - Una bolsa que falla sin detener a las demás.
+- Los tres pasos de la liquidación (preparar, devolver y cerrar) son funciones propias del servicio (7.4). Las pruebas las llaman con hora fija, juntas mediante `procesar_vencidas(ahora)` o por separado.
+- Casos:
+  - **Vencimiento con cada política:** el resultado de la tabla 7.3.
+  - **Participantes en `por_confirmar`:** pasan a `retirado` y se les devuelve.
+  - **Reanudación:** se llama a preparar y a una sola devolución, y se detiene ahí. La bolsa queda en `liquidando` con deudas pendientes, un estado válido (B9). Después, `procesar_vencidas` termina el trabajo sin pagar de más.
+  - **Dos ejecuciones seguidas:** la segunda no mueve dinero.
+  - **Una bolsa que falla sin detener a las demás:** la prueba reemplaza el paso de cerrar por uno que lanza una excepción solo para una bolsa concreta. Esto no simula la base: inyecta la falla en el servicio. Las demás bolsas se cierran y la fallida queda en `liquidando`. Una segunda llamada, ya sin el reemplazo, la cierra. Las invariantes pasan.
+  - **Estado inválido (H2 de la auditoría):** con SQL directo se deja una bolsa en `liquidando`, con la política de devolver y un participante en `pagado`. El barrido no hace la transferencia final, registra el error y B9 reporta la bolsa. Es una excepción como las de 10.5.
 - Prueba de humo del hilo:
   1. Arranca la aplicación con un intervalo de 1 s.
   2. Crea una bolsa llamando al servicio con un `ahora` de hace 10 minutos y una fecha límite de hace 5.
