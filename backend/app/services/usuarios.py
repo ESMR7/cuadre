@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.modelos import Cuenta, Usuario
 from app.domain.errores import RegistroRechazado
+from app.services.errores_bd import nombre_restriccion
 from app.services.seguridad import hashear_contrasena, parametros_configurados
 
 # Restricciones que significan "nombre o cédula ya registrados". Un nombre
@@ -21,11 +22,6 @@ RESTRICCIONES_DE_REGISTRO = frozenset(
 class UsuarioRegistrado:
     nombre_usuario: str
     creado_en: datetime
-
-
-def _restriccion(error: IntegrityError) -> str | None:
-    diagnostico = getattr(error.orig, "diag", None)
-    return getattr(diagnostico, "constraint_name", None)
 
 
 def registrar(
@@ -62,7 +58,7 @@ def registrar(
                 nombre_usuario=nombre_usuario, creado_en=ahora
             )
     except IntegrityError as error:
-        if _restriccion(error) in RESTRICCIONES_DE_REGISTRO:
+        if nombre_restriccion(error) in RESTRICCIONES_DE_REGISTRO:
             # from None: el DETAIL de PostgreSQL incluye la cédula.
             raise RegistroRechazado() from None
         raise
