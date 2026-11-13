@@ -17,12 +17,20 @@ const POR_PAGINA = 20;
   selector: 'app-cuenta',
   imports: [FormsModule, RouterLink, PesosPipe, FechaBogotaPipe],
   template: `
+    <header class="cabecera">
+      <div>
+        <span class="etiqueta">Mi cuenta</span>
+        <h1>Hola, {{ cuenta() ?? '…' }}</h1>
+      </div>
+    </header>
+
     @if (aviso.pendientes().length > 0) {
       <div class="alerta">
         <span class="etiqueta">Bolsas que esperan tu acción</span>
         @for (b of aviso.pendientes(); track b.id) {
           <p>
-            <a [routerLink]="['/bolsas', b.id]">{{ b.nombre }}</a>:
+            <a [routerLink]="['/bolsas', b.id]">{{ b.nombre }}</a
+            >:
             {{
               b.mi_estado === 'pendiente' ? 'falta tu aporte de ' : 'debes confirmar tu parte de '
             }}
@@ -32,8 +40,8 @@ const POR_PAGINA = 20;
       </div>
     }
 
-    <section class="tarjeta">
-      <span class="etiqueta">Saldo de {{ cuenta() ?? '…' }}</span>
+    <section class="tarjeta destacada">
+      <span class="etiqueta">Saldo disponible</span>
       <div class="saldo">{{ saldo() | pesos }}</div>
     </section>
 
@@ -48,14 +56,16 @@ const POR_PAGINA = 20;
     }
 
     <div class="columnas">
-      <section class="tarjeta">
+      <section class="tarjeta formulario">
         <span class="etiqueta">Cargar saldo</span>
+        <h2>Agregar dinero</h2>
         <form (ngSubmit)="cargar()">
           <label
             >Monto en pesos
             <input
               name="mc"
               inputmode="numeric"
+              placeholder="100000"
               [(ngModel)]="montoCarga"
               (ngModelChange)="cambio('cargar')"
             />
@@ -65,18 +75,25 @@ const POR_PAGINA = 20;
           </button>
         </form>
       </section>
-      <section class="tarjeta">
+      <section class="tarjeta formulario">
         <span class="etiqueta">Transferir</span>
+        <h2>Enviar a otra cuenta</h2>
         <form (ngSubmit)="transferir()">
           <label
             >Destino
-            <input name="d" [(ngModel)]="destino" (ngModelChange)="cambio('transferir')" />
+            <input
+              name="d"
+              placeholder="nombre de usuario"
+              [(ngModel)]="destino"
+              (ngModelChange)="cambio('transferir')"
+            />
           </label>
           <label
             >Monto en pesos
             <input
               name="mt"
               inputmode="numeric"
+              placeholder="20000"
               [(ngModel)]="montoTransferencia"
               (ngModelChange)="cambio('transferir')"
             />
@@ -88,31 +105,35 @@ const POR_PAGINA = 20;
       </section>
     </div>
 
-    <h2>Historial</h2>
-    @for (m of movimientos(); track $index) {
-      <div class="tarjeta fila">
-        <div>
-          <span class="etiqueta">{{ m.tipo }}</span>
-          <div>{{ m.contrapartida }}</div>
-          <small>{{ m.creado_en | fechaBogota }}</small>
-        </div>
-        <strong [class.negativo]="m.monto < 0">{{ m.monto | pesos }}</strong>
+    <section class="seccion">
+      <h2>Historial</h2>
+      <div class="lista">
+        @for (m of movimientos(); track $index) {
+          <div class="tarjeta renglon">
+            <div class="renglon-texto">
+              <span class="etiqueta">{{ m.tipo.replaceAll('_', ' ') }}</span>
+              <span class="renglon-titulo">{{ m.contrapartida }}</span>
+              <small>{{ m.creado_en | fechaBogota }}</small>
+            </div>
+            <strong class="monto" [class.negativo]="m.monto < 0">{{ m.monto | pesos }}</strong>
+          </div>
+        } @empty {
+          <p class="vacio">Sin movimientos en esta página.</p>
+        }
       </div>
-    } @empty {
-      <p>Sin movimientos en esta página.</p>
-    }
-    <div class="grupo-botones">
-      <button class="boton secundario" [disabled]="desde() === 0" (click)="pagina(-1)">
-        Anterior
-      </button>
-      <button
-        class="boton secundario"
-        [disabled]="movimientos().length < porPagina"
-        (click)="pagina(1)"
-      >
-        Siguiente
-      </button>
-    </div>
+      <div class="paginacion">
+        <button class="boton secundario pequeno" [disabled]="desde() === 0" (click)="pagina(-1)">
+          ← Anterior
+        </button>
+        <button
+          class="boton secundario pequeno"
+          [disabled]="movimientos().length < porPagina"
+          (click)="pagina(1)"
+        >
+          Siguiente →
+        </button>
+      </div>
+    </section>
   `,
 })
 export class Cuenta implements OnInit {

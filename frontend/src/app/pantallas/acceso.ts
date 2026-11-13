@@ -12,8 +12,26 @@ import { SesionService } from '../nucleo/sesion.service';
   selector: 'app-acceso',
   imports: [FormsModule],
   template: `
+    <header class="portada">
+      <span class="etiqueta">Billetera digital</span>
+      <h1>Pagos en grupo, cuentas exactas.</h1>
+      <p>Carga saldo, transfiere y arma bolsas con tus amigos sin que se pierda un peso.</p>
+    </header>
+
+    <div class="estrecho">
+      @if (error()) {
+        <div class="alerta">
+          <span class="etiqueta">Error</span>
+          <p>{{ error() }}</p>
+        </div>
+      }
+      @if (exito()) {
+        <p class="exito">{{ exito() }}</p>
+      }
+    </div>
+
     <div class="columnas">
-      <section class="tarjeta">
+      <section class="tarjeta formulario">
         <span class="etiqueta">Ya tengo cuenta</span>
         <h2>Iniciar sesión</h2>
         <form (ngSubmit)="entrar()">
@@ -33,7 +51,7 @@ import { SesionService } from '../nucleo/sesion.service';
           <button class="boton" [disabled]="ocupado()">Entrar</button>
         </form>
       </section>
-      <section class="tarjeta">
+      <section class="tarjeta formulario">
         <span class="etiqueta">Nuevo en Cuadre</span>
         <h2>Registrarme</h2>
         <form (ngSubmit)="registrar()">
@@ -51,19 +69,10 @@ import { SesionService } from '../nucleo/sesion.service';
               required
             />
           </label>
-          <button class="boton" [disabled]="ocupado()">Crear cuenta</button>
+          <button class="boton secundario" [disabled]="ocupado()">Crear cuenta</button>
         </form>
       </section>
     </div>
-    @if (error()) {
-      <div class="alerta">
-        <span class="etiqueta">Error</span>
-        <p>{{ error() }}</p>
-      </div>
-    }
-    @if (exito()) {
-      <p class="exito">{{ exito() }}</p>
-    }
   `,
 })
 export class Acceso {

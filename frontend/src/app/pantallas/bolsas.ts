@@ -14,43 +14,50 @@ const POR_PAGINA = 20;
   selector: 'app-bolsas',
   imports: [RouterLink, PesosPipe, FechaBogotaPipe],
   template: `
-    <div class="fila">
-      <h1>Mis bolsas</h1>
-      <a class="boton" routerLink="/bolsas/nueva">Crear bolsa</a>
-    </div>
+    <header class="cabecera">
+      <div>
+        <span class="etiqueta">Cobros en grupo</span>
+        <h1>Mis bolsas</h1>
+      </div>
+      <a class="boton" routerLink="/bolsas/nueva">+ Crear bolsa</a>
+    </header>
     @if (error()) {
       <div class="alerta">
         <span class="etiqueta">Error</span>
         <p>{{ error() }}</p>
       </div>
     }
-    @for (b of bolsas(); track b.id) {
-      <a
-        class="tarjeta fila"
-        [routerLink]="['/bolsas', b.id]"
-        style="text-decoration: none; color: inherit"
-      >
-        <div>
-          <span class="etiqueta">{{ b.estado }}</span>
-          <h3>{{ b.nombre }}</h3>
-          <small>Vence {{ b.fecha_limite | fechaBogota }}</small>
-        </div>
-        <div>
-          <span class="etiqueta coral">{{ b.mi_estado }}</span>
-          <div>
-            <strong>{{ b.mi_parte | pesos }}</strong>
+    <div class="lista">
+      @for (b of bolsas(); track b.id) {
+        <a class="tarjeta enlace renglon" [routerLink]="['/bolsas', b.id]">
+          <div class="renglon-texto">
+            <span
+              ><span class="chip" [attr.data-estado]="b.estado">{{ b.estado }}</span></span
+            >
+            <h3 class="renglon-titulo">{{ b.nombre }}</h3>
+            <small>Vence {{ b.fecha_limite | fechaBogota }}</small>
           </div>
-        </div>
-      </a>
-    } @empty {
-      <p>No participas en ninguna bolsa todavía.</p>
-    }
-    <div class="grupo-botones">
-      <button class="boton secundario" [disabled]="desde() === 0" (click)="pagina(-1)">
-        Anterior
+          <div class="renglon-lado">
+            <span class="chip" [attr.data-estado]="b.mi_estado">{{
+              b.mi_estado.replaceAll('_', ' ')
+            }}</span>
+            <strong class="monto neutro">{{ b.mi_parte | pesos }}</strong>
+          </div>
+        </a>
+      } @empty {
+        <p class="vacio">No participas en ninguna bolsa todavía.</p>
+      }
+    </div>
+    <div class="paginacion">
+      <button class="boton secundario pequeno" [disabled]="desde() === 0" (click)="pagina(-1)">
+        ← Anterior
       </button>
-      <button class="boton secundario" [disabled]="bolsas().length < porPagina" (click)="pagina(1)">
-        Siguiente
+      <button
+        class="boton secundario pequeno"
+        [disabled]="bolsas().length < porPagina"
+        (click)="pagina(1)"
+      >
+        Siguiente →
       </button>
     </div>
   `,
@@ -84,37 +91,54 @@ export class Bolsas implements OnInit {
   selector: 'app-crear-bolsa',
   imports: [FormsModule],
   template: `
-    <section class="tarjeta">
-      <span class="etiqueta">Nueva bolsa</span>
-      <h1>Crear bolsa</h1>
-      <form (ngSubmit)="crear()">
-        <label>Nombre <input name="n" [(ngModel)]="nombre" required /></label>
-        <label
-          >Total en pesos <input name="t" inputmode="numeric" [(ngModel)]="total" required
-        /></label>
-        <label
-          >Participantes (separados por comas, incluyéndote)
-          <input name="p" [(ngModel)]="participantes" placeholder="ana, beto, carla" required />
-        </label>
-        <label>Cuenta objetivo <input name="o" [(ngModel)]="objetivo" required /></label>
-        <label
-          >Fecha límite (hora de Bogotá)
-          <input name="f" type="datetime-local" [(ngModel)]="fecha" required />
-        </label>
-        <label class="casilla">
-          <input name="v" type="checkbox" [(ngModel)]="transferirAlVencer" />
-          Al vencer, enviar lo de quienes pagaron (si no, se devuelve todo)
-        </label>
-        <p>La división la hace el servidor: el sobrante lo paga quien crea la bolsa.</p>
-        <button class="boton" [disabled]="ocupado()">Crear</button>
-      </form>
-    </section>
-    @if (error()) {
-      <div class="alerta">
-        <span class="etiqueta">Error</span>
-        <p>{{ error() }}</p>
-      </div>
-    }
+    <div class="estrecho">
+      <header class="cabecera">
+        <div>
+          <span class="etiqueta">Nueva bolsa</span>
+          <h1>Crear bolsa</h1>
+          <p>Define el total, quiénes participan y a qué cuenta va el dinero al completarse.</p>
+        </div>
+      </header>
+      @if (error()) {
+        <div class="alerta">
+          <span class="etiqueta">Error</span>
+          <p>{{ error() }}</p>
+        </div>
+      }
+      <section class="tarjeta">
+        <form (ngSubmit)="crear()">
+          <label
+            >Nombre <input name="n" [(ngModel)]="nombre" placeholder="Cena del viernes" required
+          /></label>
+          <label
+            >Total en pesos
+            <input name="t" inputmode="numeric" [(ngModel)]="total" placeholder="120000" required
+          /></label>
+          <label
+            >Participantes (separados por comas, incluyéndote)
+            <input name="p" [(ngModel)]="participantes" placeholder="ana, beto, carla" required />
+          </label>
+          <div class="columnas">
+            <label
+              >Cuenta objetivo
+              <input name="o" [(ngModel)]="objetivo" placeholder="nombre de usuario" required />
+            </label>
+            <label
+              >Fecha límite (hora de Bogotá)
+              <input name="f" type="datetime-local" [(ngModel)]="fecha" required />
+            </label>
+          </div>
+          <label class="casilla">
+            <input name="v" type="checkbox" [(ngModel)]="transferirAlVencer" />
+            Al vencer, enviar lo de quienes pagaron (si no, se devuelve todo)
+          </label>
+          <p class="nota">
+            La división la hace el servidor: el sobrante lo paga quien crea la bolsa.
+          </p>
+          <button class="boton" [disabled]="ocupado()">Crear bolsa</button>
+        </form>
+      </section>
+    </div>
   `,
 })
 export class CrearBolsa {

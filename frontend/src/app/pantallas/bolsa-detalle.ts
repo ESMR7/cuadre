@@ -18,55 +18,13 @@ import { Bolsa } from '../nucleo/tipos';
   imports: [PesosPipe, FechaBogotaPipe],
   template: `
     @if (bolsa(); as b) {
-      <section class="tarjeta">
-        <span class="etiqueta">{{ b.estado }}</span>
-        <h1>{{ b.nombre }}</h1>
-        <dl>
-          <dt>Creador</dt>
-          <dd>{{ b.creador }}</dd>
-          <dt>Cuenta objetivo</dt>
-          <dd>{{ b.cuenta_objetivo }}</dd>
-          <dt>Total original</dt>
-          <dd>{{ b.total | pesos }}</dd>
-          <dt>Fecha límite</dt>
-          <dd>{{ b.fecha_limite | fechaBogota }}</dd>
-          <dt>Al vencer</dt>
-          <dd>
-            {{ b.transferir_al_vencer ? 'Se envía lo de quienes pagaron' : 'Se devuelve todo' }}
-          </dd>
-        </dl>
-      </section>
-
-      <div class="columnas">
-        <section class="tarjeta">
-          <span class="etiqueta">Totales</span>
-          <dl>
-            <dt>Meta</dt>
-            <dd>{{ b.meta | pesos }}</dd>
-            <dt>Aportado</dt>
-            <dd>{{ b.aportado | pesos }}</dd>
-            <dt>Transferido</dt>
-            <dd>{{ b.transferido | pesos }}</dd>
-            <dt>Participantes</dt>
-            <dd>{{ b.participantes.total }}</dd>
-            <dt>Pagados</dt>
-            <dd>{{ b.participantes.pagados }}</dd>
-            <dt>Pendientes</dt>
-            <dd>{{ b.participantes.pendientes }}</dd>
-            <dt>Por confirmar</dt>
-            <dd>{{ b.participantes.por_confirmar }}</dd>
-            <dt>Retirados</dt>
-            <dd>{{ b.participantes.retirados }}</dd>
-          </dl>
-        </section>
-        <section class="tarjeta">
-          <span class="etiqueta">Mi participación</span>
-          <div class="saldo">{{ b.mi_participacion.parte | pesos }}</div>
-          <p>
-            Estado: <strong>{{ b.mi_participacion.estado }}</strong>
-          </p>
-        </section>
-      </div>
+      <header class="cabecera">
+        <div>
+          <span class="chip" [attr.data-estado]="b.estado">{{ b.estado }}</span>
+          <h1>{{ b.nombre }}</h1>
+          <p>Vence {{ b.fecha_limite | fechaBogota }}</p>
+        </div>
+      </header>
 
       @if (cambioTerminos()) {
         <div class="alerta">
@@ -84,26 +42,93 @@ import { Bolsa } from '../nucleo/tipos';
         <p class="exito">{{ exito() }}</p>
       }
 
-      <div class="grupo-botones">
-        @if (puedeAportar()) {
-          <button class="boton" [disabled]="ocupado()" (click)="aportar()">
-            {{ idem.pendiente(intencion('aportar')) ? 'Reintentar aporte' : 'Aportar ' }}
-            {{ idem.pendiente(intencion('aportar')) ? '' : (b.mi_participacion.parte | pesos) }}
-          </button>
-        }
-        @if (puedeConfirmar()) {
-          <button class="boton" [disabled]="ocupado()" (click)="confirmar()">Confirmar</button>
-        }
-        @if (puedeRetirarse()) {
-          <button class="boton secundario" [disabled]="ocupado()" (click)="retirarse()">
-            {{ idem.pendiente(intencion('retirarse')) ? 'Reintentar retiro' : 'Retirarme' }}
-          </button>
-        }
-        @if (puedeCancelar()) {
-          <button class="boton peligro" [disabled]="ocupado()" (click)="cancelar()">
-            Cancelar bolsa
-          </button>
-        }
+      <section class="tarjeta destacada">
+        <div class="fila">
+          <div>
+            <span class="etiqueta">Mi parte</span>
+            <div class="saldo mediano">{{ b.mi_participacion.parte | pesos }}</div>
+          </div>
+          <span class="chip" [attr.data-estado]="b.mi_participacion.estado">{{
+            b.mi_participacion.estado.replaceAll('_', ' ')
+          }}</span>
+        </div>
+
+        <div class="progreso">
+          <div class="progreso-textos">
+            <span
+              ><strong>{{ b.aportado | pesos }}</strong> aportado</span
+            >
+            <span>Meta {{ b.meta | pesos }}</span>
+          </div>
+          <progress [value]="b.aportado" [max]="b.meta"></progress>
+        </div>
+
+        <div class="acciones">
+          @if (puedeAportar()) {
+            <button class="boton" [disabled]="ocupado()" (click)="aportar()">
+              {{ idem.pendiente(intencion('aportar')) ? 'Reintentar aporte' : 'Aportar ' }}
+              {{ idem.pendiente(intencion('aportar')) ? '' : (b.mi_participacion.parte | pesos) }}
+            </button>
+          }
+          @if (puedeConfirmar()) {
+            <button class="boton" [disabled]="ocupado()" (click)="confirmar()">Confirmar</button>
+          }
+          @if (puedeRetirarse()) {
+            <button class="boton secundario" [disabled]="ocupado()" (click)="retirarse()">
+              {{ idem.pendiente(intencion('retirarse')) ? 'Reintentar retiro' : 'Retirarme' }}
+            </button>
+          }
+          @if (puedeCancelar()) {
+            <button class="boton peligro" [disabled]="ocupado()" (click)="cancelar()">
+              Cancelar bolsa
+            </button>
+          }
+          @if (!puedeAportar() && !puedeConfirmar() && !puedeRetirarse() && !puedeCancelar()) {
+            <small>No tienes acciones pendientes en esta bolsa.</small>
+          }
+        </div>
+      </section>
+
+      <div class="columnas">
+        <section class="tarjeta">
+          <span class="etiqueta">Participantes</span>
+          <div class="cifras">
+            <div class="cifra">
+              <span>Total</span><strong>{{ b.participantes.total }}</strong>
+            </div>
+            <div class="cifra">
+              <span>Pagados</span><strong>{{ b.participantes.pagados }}</strong>
+            </div>
+            <div class="cifra">
+              <span>Pendientes</span><strong>{{ b.participantes.pendientes }}</strong>
+            </div>
+            <div class="cifra">
+              <span>Por confirmar</span><strong>{{ b.participantes.por_confirmar }}</strong>
+            </div>
+            <div class="cifra">
+              <span>Retirados</span><strong>{{ b.participantes.retirados }}</strong>
+            </div>
+          </div>
+        </section>
+        <section class="tarjeta">
+          <span class="etiqueta">Términos</span>
+          <dl>
+            <dt>Creador</dt>
+            <dd>{{ b.creador }}</dd>
+            <dt>Cuenta objetivo</dt>
+            <dd>{{ b.cuenta_objetivo }}</dd>
+            <dt>Total original</dt>
+            <dd>{{ b.total | pesos }}</dd>
+            <dt>Meta actual</dt>
+            <dd>{{ b.meta | pesos }}</dd>
+            <dt>Transferido</dt>
+            <dd>{{ b.transferido | pesos }}</dd>
+            <dt>Al vencer</dt>
+            <dd>
+              {{ b.transferir_al_vencer ? 'Se envía lo de quienes pagaron' : 'Se devuelve todo' }}
+            </dd>
+          </dl>
+        </section>
       </div>
     } @else if (error()) {
       <div class="alerta">
@@ -111,7 +136,7 @@ import { Bolsa } from '../nucleo/tipos';
         <p>{{ error() }}</p>
       </div>
     } @else {
-      <p>Cargando…</p>
+      <p class="cargando">Cargando…</p>
     }
   `,
 })

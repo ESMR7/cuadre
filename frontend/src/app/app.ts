@@ -1,20 +1,22 @@
 import { Component, inject } from '@angular/core';
-import { Router, RouterLink, RouterOutlet } from '@angular/router';
+import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 
 import { ApiService } from './nucleo/api.service';
 import { SesionService } from './nucleo/sesion.service';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, RouterLink],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
     <header class="encabezado">
       <div class="contenedor">
-        <a class="marca" routerLink="/">Cuadre</a>
+        <a class="marca" routerLink="/"><span class="marca-icono">C</span>Cuadre</a>
         @if (sesion.token()) {
-          <a routerLink="/cuenta">Mi cuenta</a>
-          <a routerLink="/bolsas">Mis bolsas</a>
-          <button class="boton secundario" (click)="salir()">Salir</button>
+          <nav class="nav">
+            <a routerLink="/cuenta" routerLinkActive="activo">Mi cuenta</a>
+            <a routerLink="/bolsas" routerLinkActive="activo">Mis bolsas</a>
+          </nav>
+          <button class="boton secundario pequeno" (click)="salir()">Salir</button>
         }
       </div>
     </header>
