@@ -5,6 +5,7 @@ termine en `_test`. Ningún mensaje incluye la URL: solo el nombre de la base.
 """
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from alembic import command
@@ -17,6 +18,8 @@ RUTA_ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 # SPEC 10.4: el pool de pruebas tiene al menos tantas conexiones como hilos.
 POOL_PRUEBAS = 20
 DESBORDE_PRUEBAS = 5
+
+FECHA_CUENTA_SISTEMA = datetime(2026, 1, 1, tzinfo=UTC)
 
 # El nombre completo, no solo el sufijo: así _nombre_citado nunca recibe
 # comillas ni otros caracteres especiales.
@@ -61,15 +64,6 @@ def recrear_base(url: str) -> None:
     )
 
 
-def migrar(url: str) -> None:
-    url = exigir_base_de_prueba(url)
-    configuracion = Config(str(RUTA_ALEMBIC_INI))
-    # configparser interpreta '%': se escapa por si la contraseña lo tiene.
-    url_texto = url.render_as_string(hide_password=False).replace("%", "%%")
-    configuracion.set_main_option("sqlalchemy.url", url_texto)
-    command.upgrade(configuracion, "head")
-
-
 def vaciar_tablas(motor: Engine) -> None:
     """Vacía todas las tablas salvo alembic_version con un solo TRUNCATE."""
     exigir_base_de_prueba(motor.url)
@@ -89,6 +83,42 @@ def vaciar_tablas(motor: Engine) -> None:
         if tablas:
             lista = ", ".join(preparador.quote_identifier(t) for t in tablas)
             conexion.execute(text(f"TRUNCATE {lista} RESTART IDENTITY CASCADE"))
+
+
+def _configuracion_alembic(url: URL) -> Config:
+    configuracion = Config(str(RUTA_ALEMBIC_INI))
+    # configparser interpreta '%': se escapa por si la contraseña lo tiene.
+    url_texto = url.render_as_string(hide_password=False).replace("%", "%%")
+    configuracion.set_main_option("sqlalchemy.url", url_texto)
+    return configuracion
+
+
+def migrar(url: str) -> None:
+    url = exigir_base_de_prueba(url)
+    command.upgrade(_configuracion_alembic(url), "head")
+
+
+def degradar(url: str, destino: str) -> None:
+    """Baja la base a la revisión `destino` (por ejemplo, "base")."""
+    url = exigir_base_de_prueba(url)
+    command.downgrade(_configuracion_alembic(url), destino)
+
+
+def crear_cuenta_sistema(motor: Engine) -> None:
+    """Vuelve a crear la cuenta de sistema si falta, con saldo 0.
+
+    Es lo que hace la migración (SPEC 1.3), con una fecha fija de pruebas.
+    """
+    exigir_base_de_prueba(motor.url)
+    with motor.begin() as conexion:
+        conexion.execute(
+            text(
+                "INSERT INTO cuentas (id, tipo, saldo, creada_en) "
+                "VALUES ('sistema', 'sistema', 0, :creada_en) "
+                "ON CONFLICT (id) DO NOTHING"
+            ),
+            {"creada_en": FECHA_CUENTA_SISTEMA},
+        )
 
 
 def borrar_base(url: str) -> None:
