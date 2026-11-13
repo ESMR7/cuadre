@@ -115,23 +115,37 @@ _La idea es describir la colaboración y el criterio propio, no hacer un log de 
 
 ### Requisitos
 
-- [Requisito 1]
-- [Requisito 2]
+- Docker con Docker Compose v2
+- Python 3.12 o superior (solo para correr las pruebas en el host)
+- `make`
 
 ### Instalación
 
 ```bash
-# Completar con los comandos del proyecto
+cp .env.example .env    # completa POSTGRES_USER, POSTGRES_PASSWORD y POSTGRES_DB,
+                        # y usa los mismos valores en DATABASE_URL y TEST_DATABASE_URL
+cd backend
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+cd ..
 ```
 
 ### Ejecución
 
 ```bash
-# Completar con los comandos del proyecto
+make up      # levanta PostgreSQL y la API; la API corre alembic upgrade head al arrancar
+make seed    # datos de demo: ana, beto, carla y olga
+make check   # verifica las invariantes del libro contable
 ```
+
+- Documentación interactiva: <http://localhost:8000/docs>. Inicia sesión con `POST /sesiones` y usa el token en **Authorize**.
+- Contraseña de demo de todos los usuarios: `demo-cuadre-2026`.
+- `make seed` crea la bolsa `cena` ($90.000 entre ana, beto y carla, objetivo olga; beto ya aportó) y la bolsa `vence_pronto`, que vence 3 minutos después. Se puede correr varias veces: lo que ya existe se reporta y no se duplica.
+- **El barrido de vencidas se ejecuta con `make vencer`**, no con un hilo automático (recorte 3, `DECISIONS.md`). Espera 3 minutos después de `make seed` y corre `make vencer`: carla recibe la devolución de su aporte a `vence_pronto`.
+- Para aplicar las migraciones a mano desde el host: `cd backend && .venv/bin/alembic upgrade head`.
 
 ### Pruebas
 
 ```bash
-# Completar con los comandos para ejecutar las pruebas
+make test    # usa la base cuadre_test; la crea y la borra sola
 ```
