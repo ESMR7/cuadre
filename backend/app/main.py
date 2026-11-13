@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import cuenta, dinero, sesiones, usuarios
+from app.api import bolsas, cuenta, dinero, sesiones, usuarios
 from app.api.errores import registrar_manejadores
 from app.config import obtener_configuracion
 
@@ -13,7 +13,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
 )
-for modulo in (usuarios, sesiones, cuenta, dinero):
+for modulo in (usuarios, sesiones, cuenta, dinero, bolsas):
     app.include_router(modulo.router)
 
 

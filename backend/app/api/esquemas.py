@@ -9,6 +9,7 @@ Todo patrón se valida contra el texto completo con re.fullmatch.
 import re
 from datetime import UTC, datetime
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, PlainSerializer, field_validator
 
@@ -124,3 +125,109 @@ class TransaccionSalida(BaseModel):
     destino: str
     monto: int
     creado_en: FechaUTC
+
+
+# --- Bolsas (SPEC 6.2 y 9.4) -------------------------------------------------
+
+_NOMBRE_BOLSA = re.compile(r"[a-z0-9_]{1,40}")
+
+
+class NuevaBolsa(Entrada):
+    nombre: str
+    total: int
+    participantes: list[str]
+    cuenta_objetivo: str
+    fecha_limite: str
+    transferir_al_vencer: bool
+
+    @field_validator("nombre")
+    @classmethod
+    def _nombre(cls, valor: str) -> str:
+        valor = valor.lower()
+        if _NOMBRE_BOLSA.fullmatch(valor) is None:
+            raise ValueError("nombre de bolsa inválido")
+        return valor
+
+    @field_validator("participantes")
+    @classmethod
+    def _participantes(cls, valor: list[str]) -> list[str]:
+        # Sin patrón: un nombre que no es una cuenta personal da 404 en el servicio.
+        return [p.lower() for p in valor]
+
+    @field_validator("cuenta_objetivo")
+    @classmethod
+    def _objetivo(cls, valor: str) -> str:
+        return valor.lower()
+
+    @field_validator("fecha_limite")
+    @classmethod
+    def _fecha(cls, valor: str) -> str:
+        # Texto y no datetime: en modo estricto FastAPI rechaza el texto ISO, y
+        # el modo laxo aceptaría enteros. Mensaje fijo: no repite lo recibido.
+        try:
+            fecha = datetime.fromisoformat(valor)
+        except ValueError:
+            raise ValueError("fecha inválida") from None
+        if fecha.tzinfo is None:
+            raise ValueError("fecha sin zona horaria")
+        return valor
+
+    def fecha_limite_utc(self) -> datetime:
+        return datetime.fromisoformat(self.fecha_limite).astimezone(UTC)
+
+
+class ConteoParticipantesSalida(BaseModel):
+    total: int
+    pendientes: int
+    pagados: int
+    por_confirmar: int
+    retirados: int
+
+
+class MiParticipacionSalida(BaseModel):
+    parte: int
+    estado: str
+
+
+class BolsaSalida(BaseModel):
+    id: UUID
+    nombre: str
+    creador: str
+    cuenta_objetivo: str
+    total: int
+    fecha_limite: FechaUTC
+    transferir_al_vencer: bool
+    estado: str
+    meta: int
+    aportado: int
+    transferido: int | None
+    participantes: ConteoParticipantesSalida
+    mi_participacion: MiParticipacionSalida
+
+
+class ResumenBolsaSalida(BaseModel):
+    id: UUID
+    nombre: str
+    estado: str
+    fecha_limite: FechaUTC
+    mi_parte: int
+    mi_estado: str
+
+
+class ListaBolsasSalida(BaseModel):
+    bolsas: list[ResumenBolsaSalida]
+    desde: int
+    cantidad: int
+
+
+class RetiroSalida(BaseModel):
+    devolucion: TransaccionSalida | None
+
+
+class ConfirmacionSalida(BaseModel):
+    estado_bolsa: str
+    mi_estado: str
+
+
+class CancelacionSalida(BaseModel):
+    estado_bolsa: str
