@@ -2,6 +2,15 @@
 
 No son autouse: la base solo se crea si alguna prueba la pide, así las
 pruebas puras de domain/ corren sin PostgreSQL.
+
+Al terminar cada prueba que usa `bd` se corren todas las invariantes de
+SPEC 4, antes de vaciar la base; si alguna falla, la prueba falla.
+
+Única excepción: `@pytest.mark.sin_invariantes`, para las pruebas que dejan la
+base inválida a propósito (detección de invariantes, SPEC 10.5, y estado
+inválido del barrido, SPEC 10.7). Esas solo vacían la base. El marcador está
+registrado en pytest.ini y `--strict-markers` rechaza uno mal escrito, que
+desactivaría las invariantes en silencio.
 """
 
 from collections.abc import Iterator
@@ -18,6 +27,7 @@ from tests.bd_prueba import (
     borrar_base,
     crear_cuenta_sistema,
     exigir_base_de_prueba,
+    exigir_invariantes,
     migrar,
     recrear_base,
     vaciar_tablas,
@@ -53,9 +63,11 @@ def fabrica_sesiones(motor_prueba: Engine) -> sessionmaker[Session]:
 
 @pytest.fixture
 def bd(
-    motor_prueba: Engine, fabrica_sesiones: sessionmaker[Session]
+    request: pytest.FixtureRequest,
+    motor_prueba: Engine,
+    fabrica_sesiones: sessionmaker[Session],
 ) -> Iterator[sessionmaker[Session]]:
-    """Entrega la fábrica de sesiones y deja la base vacía al terminar.
+    """Entrega la fábrica de sesiones, verifica las invariantes y vacía la base.
 
     La cuenta de sistema se asegura también al empezar: una prueba que vacía
     las tablas sin este fixture (test_vaciar_tablas_deja_tablas_vacias) la
@@ -63,6 +75,9 @@ def bd(
     """
     crear_cuenta_sistema(motor_prueba)
     yield fabrica_sesiones
-    # T3: correr aquí todas las invariantes, antes de vaciar.
-    vaciar_tablas(motor_prueba)
-    crear_cuenta_sistema(motor_prueba)
+    try:
+        if request.node.get_closest_marker("sin_invariantes") is None:
+            exigir_invariantes(motor_prueba)
+    finally:
+        vaciar_tablas(motor_prueba)
+        crear_cuenta_sistema(motor_prueba)

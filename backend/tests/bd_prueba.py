@@ -13,6 +13,8 @@ from alembic.config import Config
 from sqlalchemy import URL, Engine, create_engine, make_url, text
 from sqlalchemy.pool import NullPool
 
+from app.db.invariantes import correr_invariantes, formatear_reporte, violaciones
+
 RUTA_ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 
 # SPEC 10.4: el pool de pruebas tiene al menos tantas conexiones como hilos.
@@ -126,3 +128,15 @@ def borrar_base(url: str) -> None:
     _ejecutar_en_mantenimiento(
         url, [f"DROP DATABASE IF EXISTS {_nombre_citado(url)} WITH (FORCE)"]
     )
+
+
+def exigir_invariantes(motor: Engine) -> None:
+    """Lanza AssertionError con el reporte si alguna invariante falla.
+
+    El mensaje solo lleva ids de invariantes y de filas, nunca la URL.
+    """
+    resultados = correr_invariantes(motor)
+    fallidas = violaciones(resultados)
+    if fallidas:
+        reporte = "\n".join(formatear_reporte(fallidas))
+        raise AssertionError(f"Invariantes violadas al terminar la prueba:\n{reporte}")

@@ -1,8 +1,10 @@
-"""Inserciones con SQL directo para probar el esquema (T2).
+"""Inserciones con SQL directo para probar el esquema (T2) y las invariantes (T3).
 
 Cada función inserta una fila válida; el llamador cambia solo el valor que
-quiere probar. Las pruebas nunca confirman: la sesión se revierte al salir,
-así no quedan en el libro transacciones sin movimientos.
+quiere probar. Las pruebas de restricciones (T2) nunca confirman: la sesión se
+revierte al salir, así no quedan en el libro transacciones sin movimientos.
+Las de invariantes (T3) sí confirman: arman un libro válido con
+`registrar_transaccion` y, si lo dañan, llevan `@pytest.mark.sin_invariantes`.
 """
 
 from collections.abc import Callable
@@ -112,6 +114,25 @@ def insertar_movimiento(
         cuenta_id=cuenta_id,
         monto=monto,
     )
+
+
+def registrar_transaccion(
+    sesion: Session, tipo: str, origen: str, destino: str, monto: int
+) -> int:
+    """Transacción válida completa: cabecera, dos patas y saldos relativos.
+
+    Reemplaza al servicio del libro (que aún no existe) solo en las pruebas.
+    """
+    transaccion_id = insertar_transaccion(sesion, tipo, origen, destino, monto)
+    for cuenta_id, delta in ((origen, -monto), (destino, monto)):
+        insertar_movimiento(sesion, transaccion_id, cuenta_id, delta)
+        ejecutar(
+            sesion,
+            "UPDATE cuentas SET saldo = saldo + :delta WHERE id = :id",
+            delta=delta,
+            id=cuenta_id,
+        )
+    return transaccion_id
 
 
 def insertar_clave(
