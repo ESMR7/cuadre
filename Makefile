@@ -2,7 +2,7 @@
 # en integración continua: make test PYTHON=python
 PYTHON ?= .venv/bin/python
 
-.PHONY: up test check
+.PHONY: up test check vencer
 
 up:
 	docker compose up -d db
@@ -12,3 +12,6 @@ test:
 
 check:
 	cd backend && $(PYTHON) -m app.db.invariantes
+
+vencer:
+	cd backend && $(PYTHON) -m app.vencer

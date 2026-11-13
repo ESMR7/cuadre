@@ -1,5 +1,5 @@
 """Filas de bolsas de la tabla 8.4 con hilos (SPEC 10.4), sin cancelación ni
-vencimiento (T12).
+vencimiento (T12), más los dos barridos a la vez (T14).
 
 Cada fila se repite 10 veces con `parametrize`: cada repetición es un caso
 nuevo, así que el fixture `bd` corre las invariantes y vacía la base entre
@@ -25,14 +25,17 @@ import pytest
 from sqlalchemy import text
 
 from app.domain.errores import ErrorDominio
+from app.services.barrido import procesar_vencidas
 from app.services.bolsas import crear_bolsa
 from app.services.nucleo import transferir
 from app.services.operaciones_bolsa import aportar, confirmar, retirarse
 from app.services.reintentos import reintentos_por_codigo
 from tests.concurrencia.apoyo_hilos import correr_en_hilos
+from tests.services.apoyo_barrido import verificar_devoluciones
 from tests.services.apoyo_bolsas import FECHA_LIMITE, TRES
 from tests.services.apoyo_libro import AHORA
 from tests.services.apoyo_operaciones_bolsa import (
+    FECHA_CORTA,
     SALDO_INICIAL,
     Tx,
     cargar_saldo,
@@ -338,3 +341,69 @@ def test_hilos_crear_bolsa_contra_transferencia(bd, repeticion):
         assert sesion.execute(text("SELECT count(*) FROM bolsas")).scalar_one() == 1
     assert saldo_de(bd, "ana") == SALDO_INICIAL + 10_000
     assert saldo_de(bd, "olga") == SALDO_INICIAL - 10_000
+
+
+# --- Dos barridos a la vez (T14) -----------------------------------------
+
+
+@REPETIR
+def test_dos_barridos_a_la_vez(bd, repeticion):
+    """Política de devolver; ana y beto pagaron; la bolsa venció.
+
+    Cada paso relee tras bloquear la bolsa: una sola devolución por
+    participante, la bolsa cerrada con saldo 0 y cero reintentos.
+    """
+    t = usuarios(bd, "ana", "beto", "carla", "olga")
+    bolsa = nueva_bolsa(bd, t, transferir_al_vencer=False)
+    hacer_aportar(bd, t["ana"], bolsa)
+    hacer_aportar(bd, t["beto"], bolsa)
+    tareas = [lambda s: procesar_vencidas(bd, FECHA_CORTA) for _ in range(2)]
+    res = correr_en_hilos(bd, tareas, hilos=2)
+    assert res.conteo == Counter({"ok": 2})
+    assert [r.fallidas for r in res.valores] == [[], []]
+    assert estado_bolsa(bd, bolsa) == "cerrada"
+    assert sorted(transacciones(bd, "devolucion"), key=lambda x: x.destino) == [
+        Tx("devolucion", BOLSA, "ana", 30_000),
+        Tx("devolucion", BOLSA, "beto", 30_000),
+    ]
+    assert transacciones(bd, "transferencia_final") == []
+    assert {c: saldo_de(bd, c) for c in ("ana", "beto", BOLSA)} == {
+        "ana": SALDO_INICIAL,
+        "beto": SALDO_INICIAL,
+        BOLSA: 0,
+    }
+    verificar_devoluciones(bd)
+    assert reintentos_por_codigo() == {}
+
+
+@REPETIR
+def test_dos_barridos_a_la_vez_con_transferir(bd, repeticion):
+    """Política de transferir; ana y beto pagaron, carla pendiente; venció.
+
+    Aquí decide el bloqueo de la bolsa: sin él, los dos barridos verían la
+    bolsa en liquidando con saldo y ambos intentarían la transferencia final.
+    Exactamente una transferencia de $60.000, ninguna bolsa fallida, la bolsa
+    cerrada con saldo 0 y cero reintentos.
+    """
+    t = usuarios(bd, "ana", "beto", "carla", "olga")
+    bolsa = nueva_bolsa(bd, t, transferir_al_vencer=True)
+    hacer_aportar(bd, t["ana"], bolsa)
+    hacer_aportar(bd, t["beto"], bolsa)
+    tareas = [lambda s: procesar_vencidas(bd, FECHA_CORTA) for _ in range(2)]
+    res = correr_en_hilos(bd, tareas, hilos=2)
+    assert res.conteo == Counter({"ok": 2})
+    assert [r.fallidas for r in res.valores] == [[], []]
+    assert estado_bolsa(bd, bolsa) == "cerrada"
+    assert transacciones(bd, "transferencia_final") == [
+        Tx("transferencia_final", BOLSA, "olga", 60_000)
+    ]
+    assert transacciones(bd, "devolucion") == []
+    assert {c: saldo_de(bd, c) for c in ("ana", "beto", "carla", "olga", BOLSA)} == {
+        "ana": SALDO_INICIAL - 30_000,
+        "beto": SALDO_INICIAL - 30_000,
+        "carla": SALDO_INICIAL,
+        "olga": SALDO_INICIAL + 60_000,
+        BOLSA: 0,
+    }
+    verificar_devoluciones(bd)
+    assert reintentos_por_codigo() == {}

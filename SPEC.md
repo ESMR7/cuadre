@@ -297,7 +297,7 @@ Todos los errores salen como `{"codigo": "...", "mensaje": "..."}`. El frontend 
 
 ### 2.8 Barrido de vencidas
 
-- `procesar_vencidas(ahora)` vive en `services/`. Lista las candidatas sin bloquear y cada paso es una transacción propia que bloquea la bolsa y relee su estado.
+- `procesar_vencidas(fabrica, ahora)` vive en `services/`. Recibe la fábrica de sesiones (no una sesión) para abrir una sesión nueva por bolsa. Lista las candidatas sin bloquear y cada paso es una transacción propia que bloquea la bolsa y relee su estado.
 - Hace dos trabajos: aplicar la política a las bolsas vencidas sin completar, y retomar las que quedaron a medias.
   - `transferir`: quienes no están en `pagado` pasan a `retirado` y se les devuelve, una transacción por participante. Después, una transacción envía a la cuenta objetivo lo de quienes siguen en `pagado` y cierra la bolsa.
   - `devolver`: todos pasan a `retirado`. Una transacción por participante con deuda mayor que cero, y al final una que cierra la bolsa con saldo cero.
@@ -1255,7 +1255,7 @@ Sin cuerpo y sin clave.
 | Vence la fecha límite | Se envía lo de quienes están en `pagado`; se devuelve a los `por_confirmar` | Se devuelve todo |
 | El creador cancela | `cancelada`: cada uno confirma o se retira hasta la fecha límite | Se devuelve todo |
 
-### 7.4 Barrido: `procesar_vencidas(ahora)`
+### 7.4 Barrido: `procesar_vencidas(fabrica, ahora)`
 
 Candidatas, listadas sin bloquear:
 
@@ -1624,7 +1624,7 @@ Cada fila de la tabla 8.4 tiene dos tipos de prueba.
 
 ### 10.7 Barrido
 
-- Los tres pasos de la liquidación (preparar, devolver y cerrar) son funciones propias del servicio (7.4). Las pruebas las llaman con hora fija, juntas mediante `procesar_vencidas(ahora)` o por separado.
+- Los tres pasos de la liquidación (preparar, devolver y cerrar) son funciones propias del servicio (7.4). Las pruebas las llaman con hora fija, juntas mediante `procesar_vencidas(fabrica, ahora)` o por separado.
 - Casos:
   - **Vencimiento con cada política:** el resultado de la tabla 7.3.
   - **Participantes en `por_confirmar`:** pasan a `retirado` y se les devuelve.
