@@ -1,4 +1,8 @@
-"""Filas de bolsas de la tabla 8.4 sin cancelación ni vencimiento (T11).
+"""Filas de bolsas de la tabla 8.4 sin vencimiento (T11 y T13).
+
+Las filas de cancelación (T13) usan el resultado del recorte 2
+(DECISIONS.md, 2026-11-13): cancelar siempre retira a todos; la bolsa queda
+`liquidando` y la devolución la hace el barrido (T14).
 
 Dos pruebas por fila, sin hilos: A y luego B, y B y luego A, con los datos de
 partida de la tabla (bolsa de $90.000 entre ana, beto y carla, partes de
@@ -21,6 +25,7 @@ from tests.services.apoyo_operaciones_bolsa import (
     estado_bolsa,
     estados,
     hacer_aportar,
+    hacer_cancelar,
     hacer_confirmar,
     hacer_retirarse,
     nueva_bolsa,
@@ -283,3 +288,112 @@ def test_crear_bolsa_contra_transferencia_entre_creador_y_objetivo(bd, a_primero
     assert ra[1].estado == "abierta"
     assert saldo_de(bd, "ana") == SALDO_INICIAL + 10_000
     assert saldo_de(bd, "olga") == SALDO_INICIAL - 10_000
+
+
+# --- Cancelación (T13, recorte 2) ----------------------------------------
+
+
+@ORDENES
+def test_ultimo_aporte_contra_cancelacion(bd, a_primero):
+    t = usuarios(bd, "ana", "beto", "carla", "olga")
+    bolsa = nueva_bolsa(bd, t)
+    hacer_aportar(bd, t["ana"], bolsa)
+    hacer_aportar(bd, t["beto"], bolsa)
+    ra, rb = correr(
+        a_primero,
+        lambda: hacer_aportar(bd, t["carla"], bolsa),
+        lambda: hacer_cancelar(bd, t["ana"], bolsa),
+    )
+    if a_primero:
+        assert ra[0] == "ok"
+        assert rb == ("error", "estado_invalido")
+        assert finales(bd) == [Tx("transferencia_final", BOLSA, "olga", 90_000)]
+        assert estado_bolsa(bd, bolsa) == "cerrada"
+        assert saldo_de(bd, BOLSA) == 0
+    else:
+        assert rb[0] == "ok"
+        assert rb[1].estado_bolsa == "liquidando"
+        assert ra == ("error", "estado_invalido")
+        assert estados(bd, bolsa) == {
+            "ana": "retirado",
+            "beto": "retirado",
+            "carla": "retirado",
+        }
+        assert estado_bolsa(bd, bolsa) == "liquidando"
+        assert finales(bd) == []
+        assert saldo_de(bd, BOLSA) == 60_000
+        assert saldo_de(bd, "carla") == SALDO_INICIAL
+
+
+@ORDENES
+def test_retiro_contra_cancelacion(bd, a_primero):
+    t = usuarios(bd, "ana", "beto", "carla", "olga")
+    bolsa = nueva_bolsa(bd, t, transferir_al_vencer=False)
+    hacer_aportar(bd, t["ana"], bolsa)
+    hacer_aportar(bd, t["beto"], bolsa)
+    ra, rb = correr(
+        a_primero,
+        lambda: hacer_retirarse(bd, t["beto"], bolsa),
+        lambda: hacer_cancelar(bd, t["ana"], bolsa),
+    )
+    assert rb[0] == "ok"
+    assert rb[1].estado_bolsa == "liquidando"
+    assert estados(bd, bolsa) == {
+        "ana": "retirado",
+        "beto": "retirado",
+        "carla": "retirado",
+    }
+    assert estado_bolsa(bd, bolsa) == "liquidando"
+    assert finales(bd) == []
+    assert saldo_de(bd, "ana") == SALDO_INICIAL - 30_000
+    if a_primero:
+        assert ra[1].devolucion.monto == 30_000
+        assert saldo_de(bd, "beto") == SALDO_INICIAL
+        assert saldo_de(bd, BOLSA) == 30_000
+    else:
+        assert ra == ("error", "estado_invalido")
+        assert saldo_de(bd, "beto") == SALDO_INICIAL - 30_000
+        assert saldo_de(bd, BOLSA) == 60_000
+
+
+@ORDENES
+def test_ultima_confirmacion_contra_cancelacion(bd, a_primero):
+    """Datos de "última confirmación contra un retiro" con carla de creadora."""
+    t = usuarios(bd, "ana", "beto", "carla", "dani", "olga")
+    bolsa = nueva_bolsa(
+        bd,
+        t,
+        creador="carla",
+        participantes=("ana", "beto", "carla", "dani"),
+        total=120_000,
+    )
+    cuenta = "bolsa-carla-cena"
+    for n in ("ana", "beto", "carla"):
+        hacer_aportar(bd, t[n], bolsa)
+    hacer_retirarse(bd, t["dani"], bolsa)
+    for n in ("beto", "carla"):
+        hacer_confirmar(bd, t[n], bolsa)
+    assert estados(bd, bolsa)["ana"] == "por_confirmar"
+    ra, rb = correr(
+        a_primero,
+        lambda: hacer_confirmar(bd, t["ana"], bolsa),
+        lambda: hacer_cancelar(bd, t["carla"], bolsa),
+    )
+    if a_primero:
+        assert ra[1].estado_bolsa == "cerrada"
+        assert rb == ("error", "estado_invalido")
+        assert finales(bd) == [Tx("transferencia_final", cuenta, "olga", 90_000)]
+        assert saldo_de(bd, cuenta) == 0
+    else:
+        assert rb[0] == "ok"
+        assert rb[1].estado_bolsa == "liquidando"
+        assert ra == ("error", "estado_invalido")
+        assert estados(bd, bolsa) == {
+            "ana": "retirado",
+            "beto": "retirado",
+            "carla": "retirado",
+            "dani": "retirado",
+        }
+        assert estado_bolsa(bd, bolsa) == "liquidando"
+        assert finales(bd) == []
+        assert saldo_de(bd, cuenta) == 90_000

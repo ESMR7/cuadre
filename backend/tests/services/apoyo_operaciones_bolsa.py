@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.domain.errores import ErrorDominio
 from app.services.nucleo import cargar
-from app.services.operaciones_bolsa import aportar, confirmar, retirarse
+from app.services.operaciones_bolsa import (
+    aportar,
+    cancelar,
+    confirmar,
+    retirarse,
+)
 from app.services.reintentos import reiniciar_contador, reintentos_por_codigo
 from tests.services.apoyo_bolsas import conteos, crear
 from tests.services.apoyo_libro import AHORA, crear_usuario
@@ -68,6 +73,11 @@ def hacer_retirarse(bd, token, bolsa_id, clave=None, ahora: datetime = AHORA):
 def hacer_confirmar(bd, token, bolsa_id, ahora: datetime = AHORA):
     with bd() as sesion:
         return confirmar(sesion, token, bolsa_id, ahora)
+
+
+def hacer_cancelar(bd, token, bolsa_id, ahora: datetime = AHORA):
+    with bd() as sesion:
+        return cancelar(sesion, token, bolsa_id, ahora)
 
 
 # --- Lecturas para verificar ---------------------------------------------

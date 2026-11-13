@@ -57,6 +57,11 @@ class ResultadoConfirmar:
     mi_estado: str
 
 
+@dataclass(frozen=True)
+class ResultadoCancelar:
+    estado_bolsa: str
+
+
 Estados = dict[str, EstadoParticipante]
 
 _SALDO = text("SELECT saldo FROM cuentas WHERE id = :cuenta")
@@ -91,6 +96,54 @@ def confirmar(
     return ejecutar_con_reintentos(
         "confirmar", lambda: _confirmar_una_vez(sesion, token, bolsa_id, ahora)
     )
+
+
+def cancelar(
+    sesion: Session, token: str, bolsa_id: UUID, ahora: datetime
+) -> ResultadoCancelar:
+    """Cancelar una bolsa (SPEC 7.1, con el recorte 2). Sin clave y sin dinero.
+
+    Recorte 2 (DECISIONS.md, 2026-11-13): "cancelar siempre devuelve todo, sin
+    importar la política. El estado cancelada queda en el esquema, pero no se
+    produce." Todos pasan a `retirado`; la bolsa queda `cerrada` (vía
+    `_cerrar_en_cero`) si su saldo es 0 y `liquidando` si no.
+    """
+    return ejecutar_con_reintentos(
+        "cancelar", lambda: _cancelar_una_vez(sesion, token, bolsa_id, ahora)
+    )
+
+
+def _cancelar_una_vez(
+    sesion: Session, token: str, bolsa_id: UUID, ahora: datetime
+) -> ResultadoCancelar:
+    """Sin clave (paso 2) y sin bloquear cuentas (paso 4): no mueve dinero."""
+    with sesion.begin():
+        yo = autenticar(sesion, token, ahora).cuenta_id
+        bolsa = _bloquear_bolsa(sesion, bolsa_id)
+        _, estados = _leer_participantes(sesion, bolsa_id, yo)
+        if bolsa.creador_cuenta_id != yo:
+            raise SinPermiso("Solo el creador puede cancelar.")
+        # El saldo de la bolsa se lee bajo el bloqueo de su fila (2.4).
+        saldo = _leer_saldo(sesion, bolsa.cuenta_id)
+        r = dominio.cancelar(
+            EstadoBolsa(bolsa.estado),
+            estados,
+            transferir_al_vencer=False,  # Recorte 2.
+            saldo_bolsa=saldo,
+            fecha_limite=bolsa.fecha_limite,
+            ahora=ahora,
+        )
+        _escribir_estados(sesion, bolsa_id, estados, r.participantes)
+        if r.estado_bolsa == EstadoBolsa.CERRADA:
+            _cerrar_en_cero(sesion, bolsa)
+        else:
+            sesion.execute(
+                update(Bolsa)
+                .where(Bolsa.id == bolsa_id)
+                .values(estado=r.estado_bolsa.value)
+            )
+        respuesta = ResultadoCancelar(estado_bolsa=r.estado_bolsa.value)
+    return respuesta
 
 
 def _aportar_una_vez(
