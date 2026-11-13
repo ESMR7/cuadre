@@ -1016,8 +1016,7 @@ Entrada: `{"destino": <texto>, "monto": <entero>}` y la cabecera `Idempotency-Ke
 - Movimientos de la cuenta personal de quien consulta, cruzados con su transacción para obtener tipo, contrapartida y fecha.
 - Cada entrada muestra tipo, contrapartida, monto con signo y fecha. No muestra el id de la transacción ni el saldo.
 - Orden por fecha descendente. Los empates se resuelven por id de transacción, que se usa para ordenar pero no se muestra.
-- Paginación por rango: desde la posición a hasta la b. 20 entradas por defecto y como máximo 100 (9.2).
-
+- Paginación con `desde` y `cantidad` (9.1): `desde` es la posición de la primera entrada, empieza en 0; `cantidad` es el número de entradas, 20 por defecto y como máximo 100. Fuera de rango: 422 `forma_invalida`, que también valida `domain/` (`validar_paginacion`).
 ```sql
 SELECT t.tipo,
        CASE WHEN t.cuenta_origen_id = :cuenta THEN t.cuenta_destino_id

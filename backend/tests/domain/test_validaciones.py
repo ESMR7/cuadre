@@ -8,7 +8,11 @@ from hypothesis import strategies as st
 
 from app.domain.constantes import TOPE_OPERACION
 from app.domain.errores import ErrorDominio
-from app.domain.validaciones import validar_destino_distinto, validar_monto
+from app.domain.validaciones import (
+    validar_destino_distinto,
+    validar_monto,
+    validar_paginacion,
+)
 
 
 class EnteroFalso(int):
@@ -115,3 +119,18 @@ def test_transferencia_a_otra_cuenta_pasa():
 def test_ids_que_difieren_en_mayusculas_no_se_normalizan():
     # Normalizar a minúsculas es de la API (SPEC 3.3); aquí la comparación es exacta.
     assert validar_destino_distinto("ana", "Ana") is None
+
+
+# --- Paginación del historial (SPEC 9.1, T7) ---------------------------------
+
+
+@pytest.mark.parametrize(("desde", "cantidad"), [(0, 1), (0, 100), (500, 20)])
+def test_validar_paginacion_acepta_bordes(desde, cantidad):
+    assert validar_paginacion(desde, cantidad) is None
+
+
+@pytest.mark.parametrize(("desde", "cantidad"), [(-1, 20), (0, 0), (0, 101)])
+def test_validar_paginacion_rechaza_fuera_de_rango(desde, cantidad):
+    with pytest.raises(ErrorDominio) as excinfo:
+        validar_paginacion(desde, cantidad)
+    verificar_codigo(excinfo, "forma_invalida")

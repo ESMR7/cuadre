@@ -2,6 +2,7 @@
 
 from app.domain.constantes import TOPE_OPERACION
 from app.domain.errores import (
+    FormaInvalida,
     MontoInvalido,
     SaldoInsuficiente,
     SobreElTope,
@@ -42,3 +43,20 @@ def validar_saldo_suficiente(saldo: int, monto: int) -> None:
     """Rechaza si el saldo leído de la fila bloqueada es menor que el monto."""
     if saldo < monto:
         raise SaldoInsuficiente("Saldo insuficiente.")
+
+
+CANTIDAD_POR_DEFECTO = 20
+CANTIDAD_MAXIMA = 100
+
+
+def validar_paginacion(desde: int, cantidad: int) -> None:
+    """Valida el rango del historial (SPEC 9.1): desde >= 0 y cantidad en 1..100.
+
+    Excepción a la decisión de T4: `FormaInvalida` es un código que en
+    general solo detecta la API, pero el servicio de consultas no confía en
+    que la API haya validado el rango y lo revisa también aquí.
+    """
+    if desde < 0:
+        raise FormaInvalida("desde debe ser mayor o igual que cero.")
+    if not 1 <= cantidad <= CANTIDAD_MAXIMA:
+        raise FormaInvalida("cantidad debe estar entre 1 y 100.")
