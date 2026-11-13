@@ -20,6 +20,11 @@ class Configuracion(BaseSettings):
     scrypt_n: int = 2**17
     scrypt_r: int = 8
     scrypt_p: int = 1
+    # Orígenes del frontend permitidos por CORS, separados por comas (SPEC 9.1).
+    cors_origenes: str = "http://localhost:4200"
+
+    def lista_cors_origenes(self) -> list[str]:
+        return [o.strip() for o in self.cors_origenes.split(",") if o.strip()]
 
     def __repr__(self) -> str:
         return "Configuracion(<oculta>)"

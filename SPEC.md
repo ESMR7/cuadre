@@ -279,12 +279,14 @@ Todos los errores salen como `{"codigo": "...", "mensaje": "..."}`. El frontend 
 | Misma clave con otro cuerpo | 409 | `clave_reutilizada` |
 | Método no permitido en una ruta existente | 405 | `metodo_no_permitido` |
 | Reintentos agotados | 503 | `reintentos_agotados` |
+| Error inesperado del servidor | 500 | `error_interno` |
 
 - No hay precedencia contractual entre errores: gana el primero que se detecta. Las pruebas violan una sola regla por petición. La excepción son las operaciones sobre una bolsa, donde el estado se revisa antes que el plazo (8.2).
 - Quien no figura en la bolsa y quien figura sin ser el creador reciben el mismo 403. Es un tradeoff aceptado: se confirma que la bolsa existe, pero los ids son UUID y no se pueden recorrer probando números.
 - Debe existir una ruta para que un invitado vea los términos de la bolsa antes de entrar.
 - Saldo insuficiente es 409 porque se decide con el estado de la cuenta, aunque el usuario pueda arreglarlo cargando saldo.
 - Un registro repetido es 409 porque depende de lo que ya existe en la base. Es el mismo código para nombre y cédula, para no revelar si una cédula está registrada.
+- `error_interno` es la red de seguridad para cualquier excepción no prevista. La respuesta no incluye ningún detalle interno, y el log solo registra el tipo de la excepción, el método y la ruta, sin el mensaje ni el traceback, que pueden traer la URL de la base.
 
 ### 2.7 Tiempo y vencimiento
 
