@@ -13,6 +13,7 @@ registrado en pytest.ini y `--strict-markers` rechaza uno mal escrito, que
 desactivaría las invariantes en silencio.
 """
 
+import os
 from collections.abc import Iterator
 
 import pytest
@@ -32,6 +33,10 @@ from tests.bd_prueba import (
     recrear_base,
     vaciar_tablas,
 )
+
+# scrypt rápido en las pruebas (SPEC 1.4). La configuración se lee con
+# lru_cache al primer uso, después de este punto.
+os.environ.setdefault("SCRYPT_N", str(2**14))
 
 
 @pytest.fixture(scope="session")

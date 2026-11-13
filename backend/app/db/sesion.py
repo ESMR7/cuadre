@@ -22,7 +22,7 @@ def crear_fabrica(motor: Engine) -> sessionmaker[Session]:
     # expire_on_commit=True (por defecto): tras un commit ningún objeto queda
     # con datos de la transacción anterior. El servicio arma su respuesta
     # antes del commit (H1).
-    return sessionmaker(bind=motor)
+    return sessionmaker(bind=motor, expire_on_commit=True)
 
 
 @lru_cache

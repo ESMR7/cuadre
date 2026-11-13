@@ -126,3 +126,12 @@ def test_vaciar_tablas_deja_tablas_vacias(motor_prueba: Engine) -> None:
     finally:
         with motor_prueba.begin() as conexion:
             conexion.execute(text("DROP TABLE IF EXISTS prueba_hija, prueba_padre"))
+
+
+def test_fabrica_de_sesiones_usa_expire_on_commit() -> None:
+    # H1: tras un commit ningún objeto conserva datos viejos.
+    from app.db.sesion import crear_fabrica
+
+    fabrica = crear_fabrica(create_engine("postgresql+psycopg://"))
+    assert fabrica.kw.get("expire_on_commit") is True
+    assert fabrica().expire_on_commit is True

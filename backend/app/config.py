@@ -16,6 +16,10 @@ class Configuracion(BaseSettings):
 
     database_url: str | None = None
     test_database_url: str | None = None
+    # Parámetros de scrypt: mínimos de OWASP (SPEC 1.4). Las pruebas usan 2^14.
+    scrypt_n: int = 2**17
+    scrypt_r: int = 8
+    scrypt_p: int = 1
 
     def __repr__(self) -> str:
         return "Configuracion(<oculta>)"
