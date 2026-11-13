@@ -85,3 +85,24 @@ def completar_clave(
         .where(*_de(cuenta, clave))
         .values(transaccion_id=transaccion_id)
     )
+
+
+def transaccion_guardada(
+    sesion: Session, cuenta: str, clave: UUID, hash_: str
+) -> TransaccionRegistrada | None:
+    """Como `respuesta_guardada`, pero admite una clave sin transacción.
+
+    Solo para retirarse: un retiro sin pago confirma sin mover dinero
+    (SPEC 2.5 y L7), y su reintento responde `None`. Otro hash:
+    ClaveReutilizada.
+    """
+    fila = sesion.execute(
+        select(ClaveIdempotencia.hash_peticion, ClaveIdempotencia.transaccion_id).where(
+            *_de(cuenta, clave)
+        )
+    ).one()
+    if fila.hash_peticion != hash_:
+        raise ClaveReutilizada()
+    if fila.transaccion_id is None:
+        return None
+    return leer_transaccion(sesion, fila.transaccion_id)

@@ -8,7 +8,7 @@ hacen commit.
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import insert, select, text, update
 from sqlalchemy.orm import Session
 
 from app.db.modelos import Cuenta, Movimiento, Transaccion
@@ -118,3 +118,29 @@ def leer_transaccion(sesion: Session, transaccion_id: int) -> TransaccionRegistr
         monto=fila.monto,
         creado_en=fila.creado_en,
     )
+
+
+def deuda_participante(
+    sesion: Session, cuenta_bolsa: str, cuenta_participante: str
+) -> int:
+    """Aportes menos devoluciones entre el participante y la bolsa (SPEC 3.6).
+
+    Se calcula desde el libro y por tipo: una transferencia final hacia un
+    participante nunca cuenta como devolución. Solo lee.
+    """
+    return sesion.execute(
+        text(
+            """
+            SELECT COALESCE(SUM(CASE
+                       WHEN tipo = 'aporte' AND cuenta_origen_id = :participante
+                            AND cuenta_destino_id = :bolsa THEN monto
+                       WHEN tipo = 'devolucion' AND cuenta_origen_id = :bolsa
+                            AND cuenta_destino_id = :participante THEN -monto
+                       ELSE 0 END), 0)
+            FROM transacciones
+            WHERE tipo IN ('aporte', 'devolucion')
+              AND (cuenta_origen_id = :bolsa OR cuenta_destino_id = :bolsa)
+            """
+        ),
+        {"bolsa": cuenta_bolsa, "participante": cuenta_participante},
+    ).scalar_one()
