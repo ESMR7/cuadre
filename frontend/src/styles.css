@@ -1,0 +1,221 @@
+/* Colores y estilos de SPEC 9.5, definidos una sola vez. Todos los componentes
+   los usan desde aquí. La app se llama Cuadre: sin logo ni marca de HabiCapital. */
+:root {
+  --primario: #491793;
+  --acento: #9333e9;
+  --turquesa: #1cb4ab;
+  --coral: #ff5958;
+  --fondo-alerta: #fff6f6;
+  --texto: #171717;
+  --texto-2: #4b5260;
+  --borde: #e4e8ee;
+  --fondo: #ffffff;
+  --radio: 12px;
+  --fuente: 'Montserrat', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: var(--fuente);
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--primario);
+  font-weight: 800;
+  margin: 0 0 0.5rem;
+}
+
+p {
+  color: var(--texto-2);
+}
+
+a {
+  color: var(--primario);
+}
+
+.contenedor {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 1.5rem 16px;
+}
+
+.encabezado {
+  background: var(--fondo);
+  border-bottom: 1px solid var(--borde);
+}
+
+.encabezado .contenedor {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+.marca {
+  color: var(--primario);
+  font-weight: 900;
+  font-size: 1.4rem;
+  text-decoration: none;
+  margin-right: auto;
+}
+
+.etiqueta {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--turquesa);
+}
+
+.etiqueta.coral {
+  color: var(--coral);
+}
+
+.tarjeta {
+  background: var(--fondo);
+  border: 1px solid var(--borde);
+  border-top: 4px solid var(--coral);
+  border-radius: var(--radio);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.alerta {
+  background: var(--fondo-alerta);
+  border: 1px solid var(--coral);
+  border-radius: var(--radio);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  color: var(--texto);
+}
+
+.alerta .etiqueta {
+  color: var(--coral);
+  display: block;
+}
+
+.alerta p {
+  margin: 0.25rem 0 0;
+  color: var(--texto-2);
+}
+
+.exito {
+  color: var(--turquesa);
+  font-weight: 600;
+}
+
+.boton {
+  background: var(--primario);
+  color: var(--fondo);
+  border: 0;
+  border-radius: 8px;
+  padding: 0.6rem 1.1rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.boton.secundario {
+  background: var(--fondo);
+  color: var(--primario);
+  border: 1px solid var(--borde);
+}
+
+.boton.peligro {
+  background: var(--coral);
+}
+
+.boton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.grupo-botones {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+label {
+  display: grid;
+  gap: 0.25rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+input,
+select {
+  font: inherit;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  color: var(--texto);
+  width: 100%;
+}
+
+.casilla {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.casilla input {
+  width: auto;
+}
+
+.columnas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.fila {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.saldo {
+  font-size: 2.2rem;
+  font-weight: 900;
+  color: var(--texto);
+}
+
+.negativo {
+  color: var(--coral);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+dt {
+  color: var(--texto-2);
+}
+
+dd {
+  margin: 0;
+  font-weight: 600;
+}
