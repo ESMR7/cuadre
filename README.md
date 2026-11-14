@@ -125,7 +125,7 @@ Iba atrasado respecto al plan y tuve que aplicar recortes en la implementación.
 ### Fuera de alcance desde el diseño
 
 | Fuera de alcance                                                        | Motivo                                                 | Impacto                                                                        |
-| ----------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------ | --------------------------- |
+| ----------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
 | Cobros recurrentes y creación de cobros con IA                          | Una sola funcionalidad propia, bien hecha, en 72 horas | La bolsa es de un solo uso                                                     |
 | Políticas avanzadas (exigir el total original, cancelar ante un retiro) | Modelo básico con una sola política                    | La meta puede bajar y la cuenta objetivo recibe menos                          |
 | Reverso de una transferencia                                            | No se pidió                                            | Un error se corrige a mano                                                     |
